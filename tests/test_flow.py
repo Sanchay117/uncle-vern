@@ -49,6 +49,14 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(p["source"], "inline")
         self.assertEqual(p["from_addr"], "james.okoro@outlook-mail.example")
 
+    def test_address_typed_above_the_forward_wins(self):
+        text = GMAIL_FORWARD.replace("Uncle, this one's for you.", "Reply-to is real.agent@mailbox.example")
+        p = intake.parse_forward(text)
+        p["candidates"] = intake.candidates(p, {OWNER, INBOX})
+        self.assertEqual(p["candidates"][0], "real.agent@mailbox.example")
+        eng = make_app(tempfile.mkdtemp()).engine
+        self.assertEqual(eng._pick_address(p), "real.agent@mailbox.example")
+
     def test_gmail_inline_forward(self):
         p = intake.parse_forward(GMAIL_FORWARD)
         self.assertEqual(p["from_addr"], "james.okoro@outlook-mail.example")

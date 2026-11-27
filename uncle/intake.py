@@ -122,7 +122,9 @@ def candidates(parsed, exclude):
     """Addresses the scammer might want a reply at, best guess first."""
     exclude = {e.lower() for e in exclude if e}
     order = []
-    for a in [parsed.get("reply_to")] + addresses(parsed.get("body", "")) + [parsed.get("from_addr")]:
+    # An address the boss typed above the forward wins: Gmail's plain Forward drops a hidden Reply-To.
+    for a in (addresses(parsed.get("note", "")) + [parsed.get("reply_to")] + addresses(parsed.get("body", ""))
+              + [parsed.get("from_addr")]):
         if a and a not in exclude and a not in order and not a.endswith(("@agentmail.to", "@agentmail.test")):
             order.append(a)
     return order

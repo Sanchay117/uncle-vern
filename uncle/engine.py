@@ -217,6 +217,9 @@ class Engine:
 
     def _pick_address(self, scam):
         cands = scam.get("candidates") or []
+        named = [a for a in intake.addresses(scam.get("note", "")) if a in cands]
+        if named:
+            return named[0]
         if len(cands) <= 1:
             return cands[0] if cands else None
         crit = {f"a{i}": f"Write to {a}" for i, a in enumerate(cands[:8])}
