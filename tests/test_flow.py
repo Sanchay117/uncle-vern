@@ -205,25 +205,32 @@ class MemoryTests(unittest.TestCase):
                 {"id": 4, "kin": "[]"}, {"id": 5, "kin": "not json"}]
         self.assertEqual(memory.families(rows), [[1, 2, 3]])
 
-    def test_pinecone_rerank_request(self):
+    def test_pinecone_embed_request(self):
         seen = {}
 
         def fake(method, url, body=None, headers=None, timeout=60, retries=2):
             seen.update(method=method, url=url, body=body, headers=headers)
-            return {"data": [{"index": 1, "score": 0.91}, {"index": 0, "score": 0.2}], "usage": {"rerank_units": 1}}
+            return {"data": [{"values": [3.0, 4.0]}, {"values": [0.0, 2.0]}], "usage": {"total_tokens": 9}}
         old, os.environ["PINECONE_API_KEY"] = clients.net.request, "pc-test"
         clients.net.request = fake
         try:
-            r = memory.PineconeRanker()
-            self.assertEqual(r.rank("Dear friend", ["a", "b"], top_n=2), [(1, 0.91), (0, 0.2)])
+            e = memory.PineconeEmbedder()
+            self.assertTrue(e.available())
+            self.assertEqual(e.embed(["Dear friend", "Greetings"]), [[0.6, 0.8], [0.0, 1.0]])  # unit length
         finally:
             clients.net.request = old
             del os.environ["PINECONE_API_KEY"]
-        self.assertEqual((seen["method"], seen["url"]), ("POST", "https://api.pinecone.io/rerank"))
+        self.assertEqual((seen["method"], seen["url"]), ("POST", "https://api.pinecone.io/embed"))
         self.assertEqual(seen["headers"]["Api-Key"], "pc-test")
         self.assertIn("X-Pinecone-API-Version", seen["headers"])
-        self.assertEqual(seen["body"]["model"], "bge-reranker-v2-m3")
-        self.assertEqual(seen["body"]["documents"][1], {"id": "1", "text": "b"})
+        self.assertEqual(seen["body"]["model"], "llama-text-embed-v2")
+        self.assertEqual(seen["body"]["inputs"][1], {"text": "Greetings"})
+        self.assertEqual(seen["body"]["parameters"]["input_type"], "passage")
+
+    def test_vectors_survive_the_disk(self):
+        v = [0.25, -0.5, 0.75]
+        self.assertEqual(memory.unpack(memory.pack(v)), v)
+        self.assertIsNone(memory.unpack("not base64!"))
 
     def test_no_connector_means_no_memory_and_no_fuss(self):
         old = memory.gateway.resolve
@@ -232,9 +239,12 @@ class MemoryTests(unittest.TestCase):
             raise RuntimeError("No Sprites connector found for pinecone")
         memory.gateway.resolve = missing
         try:
-            r = memory.PineconeRanker()
-            self.assertFalse(r.available())
-            self.assertEqual(r.rank("q", ["d"], 1), [])
+            self.assertFalse(memory.PineconeEmbedder().available())
+            with tempfile.TemporaryDirectory() as d:
+                from uncle.store import Store
+                s = Store(os.path.join(d, "m.db"))
+                m = memory.Memory(s, memory.PineconeEmbedder())
+                self.assertEqual(m.backfill(), 0)
         finally:
             memory.gateway.resolve = old
 
@@ -250,8 +260,13 @@ class MemoryTests(unittest.TestCase):
             db.commit()
             db.close()
             s = Store(path)
-            self.assertIn("kin", {r["name"] for r in s.q("PRAGMA table_info(threads)")})
+            self.assertTrue({"kin", "vec"} <= {r["name"] for r in s.q("PRAGMA table_info(threads)")})
             self.assertEqual(s.q("SELECT scam_text, kin FROM threads"), [{"scam_text": "old one", "kin": None}])
+            # A disk with reranker kin but no vectors yet gets its kin redone with embeddings.
+            s.update_thread(1, kin="[]")
+            s.db.execute("ALTER TABLE threads DROP COLUMN vec")
+            s = Store(path)
+            self.assertEqual(s.q("SELECT kin FROM threads"), [{"kin": None}])
 
 
 class AgentMailConnectorTests(unittest.TestCase):
@@ -323,7 +338,7 @@ class VoiceTests(unittest.TestCase):
             voice.net.request = old
             del os.environ["DEEPGRAM_API_KEY"]
         self.assertTrue(audio.startswith(b"ID3"))
-        self.assertEqual(seen["url"], "https://api.deepgram.com/v1/speak?model=aura-2-atlas-en&encoding=mp3")
+        self.assertEqual(seen["url"], "https://api.deepgram.com/v1/speak?model=aura-2-pluto-en&encoding=mp3")
         self.assertEqual(seen["headers"]["Authorization"], "Token dg-test")
         self.assertEqual(seen["body"], {"text": "Well hello."})
 

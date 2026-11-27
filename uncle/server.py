@@ -62,8 +62,8 @@ class App:
         self.jev, self.llm = jev, llm
         web.DECIDER.update(name=jev.name, maker=jev.maker, about=jev.about)
         web.VOICE.update(name=llm.name, maker=llm.maker)
-        ranker = memory.WordsRanker() if self.cfg.mock else memory.PineconeRanker()
-        self.memory = memory.Memory(self.store, ranker, same=self.cfg.memory_same)
+        embedder = memory.WordsEmbedder() if self.cfg.mock else memory.PineconeEmbedder()
+        self.memory = memory.Memory(self.store, embedder, same=self.cfg.memory_same)
         speaker = voice.MockSpeaker() if self.cfg.mock else voice.Deepgram(self.cfg.voice_model)
         self.voice = voice.Voice(os.path.join(os.path.dirname(os.path.abspath(self.cfg.db_path)), "voice"),
                                  speaker, per_day=self.cfg.voice_per_day)

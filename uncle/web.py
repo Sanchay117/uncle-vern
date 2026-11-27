@@ -677,7 +677,7 @@ def kin_line(kin, memory_name):
         more = f" Uncle has had it {times} besides, and didn't write back." if hidden else ""
     else:
         what, more = f"Uncle has had this same letter {times}, from another address.", ""
-    return (f'<p class="kin"><b>Seen this script before.</b> {esc(memory_name)}\'s reranker says {what}'
+    return (f'<p class="kin"><b>Seen this script before.</b> {esc(memory_name)} compared the wording: {what}'
             f'{more} When one mailbox gets shut down, the script just moves to a new one.</p>')
 
 

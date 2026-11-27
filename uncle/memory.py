@@ -1,30 +1,61 @@
 """Uncle's memory for scripts: has he had this letter before, from somebody else?
 
 Scam gangs send one script from many addresses, and the addresses get shut down while the script lives on.
-Pinecone's hosted reranker (bge-reranker-v2-m3, on Pinecone's free Starter plan) compares a new scam with the
-ones already on Uncle's disk and says how alike they are. Matches above a bar are the same family.
+Pinecone's hosted embedding model (llama-text-embed-v2, on Pinecone's free Starter plan) turns each scam into a
+vector, kept on Uncle's disk. Two scams whose vectors point the same way are the same script.
+
+Measured on Uncle's real mail (Nov 27): three copies of one NESREA letter from three addresses scored 0.986 to
+0.995 against each other; every other pair scored 0.45 or less. Pinecone's reranker, tried first, couldn't tell
+them apart (0.10 to 0.27 for the copies, 0.27 for an unrelated romance scam).
 
 Without a Pinecone connector Uncle simply has no memory for scripts; nothing else changes.
 """
+import array
+import base64
+import hashlib
 import json
+import math
 import re
 import threading
 import time
 
 from . import gateway, net
 
-MODEL = "bge-reranker-v2-m3"
+MODEL = "llama-text-embed-v2"
 API_VERSION = "2025-04"
-QUERY_CHARS = 1500
-DOC_CHARS = 2500
+TEXT_CHARS = 2000
+BATCH = 90  # Pinecone takes up to 96 inputs a request
 
 
-def scam_doc(subject, text):
-    return f"Subject: {subject or ''}\n\n{text or ''}".strip()
+def scam_text(text):
+    """What gets compared: the letter itself, not the subject line, which scammers change every time."""
+    return " ".join((text or "").split())[:TEXT_CHARS]
 
 
-class PineconeRanker:
-    """Pinecone's rerank endpoint, through the Sprites connector (or a key, off the Sprite)."""
+def _unit(v):
+    n = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / n for x in v]
+
+
+def cosine(a, b):
+    return sum(x * y for x, y in zip(a, b))  # both are unit length
+
+
+def pack(v):
+    return base64.b64encode(array.array("f", v).tobytes()).decode()
+
+
+def unpack(s):
+    try:
+        a = array.array("f")
+        a.frombytes(base64.b64decode(s))
+        return list(a)
+    except (ValueError, TypeError):
+        return None
+
+
+class PineconeEmbedder:
+    """Pinecone's embed endpoint, through the Sprites connector (or a key, off the Sprite)."""
     name = "Pinecone"
 
     def __init__(self):
@@ -45,62 +76,86 @@ class PineconeRanker:
                 self._missing_until = time.time() + 600
                 return False
 
-    def rank(self, query, docs, top_n):
-        """[(index into docs, score 0..1)], best first."""
-        if not self.available():
-            return []
-        body = {"model": MODEL, "query": query[:QUERY_CHARS],
-                "documents": [{"id": str(i), "text": d[:DOC_CHARS]} for i, d in enumerate(docs)],
-                "top_n": top_n, "return_documents": False, "parameters": {"truncate": "END"}}
-        res = net.request("POST", self._ep.url("/rerank"), body,
-                          headers={**self._ep.headers, "X-Pinecone-API-Version": API_VERSION}, timeout=30)
-        return [(int(d["index"]), float(d["score"])) for d in (res or {}).get("data", [])]
+    def embed(self, texts):
+        """Unit vectors, one per text."""
+        out = []
+        for i in range(0, len(texts), BATCH):
+            body = {"model": MODEL, "inputs": [{"text": t} for t in texts[i:i + BATCH]],
+                    "parameters": {"input_type": "passage", "truncate": "END"}}
+            res = net.request("POST", self._ep.url("/embed"), body,
+                              headers={**self._ep.headers, "X-Pinecone-API-Version": API_VERSION}, timeout=60)
+            out += [_unit(d["values"]) for d in (res or {}).get("data", [])]
+        if len(out) != len(texts):
+            raise RuntimeError(f"Pinecone sent {len(out)} vectors for {len(texts)} scams")
+        return out
 
 
-class WordsRanker:
-    """For tests and local runs: share of words in common. Same shape as Pinecone's answer."""
+class WordsEmbedder:
+    """For tests and local runs: hashed word counts. Same shape as Pinecone's answer."""
     name = "word overlap"
 
     def available(self):
         return True
 
-    def rank(self, query, docs, top_n):
-        def words(s):
-            return set(re.findall(r"[a-z]{3,}", s.lower()))
-        q = words(query)
-        scored = [(i, len(q & words(d)) / max(1, len(q | words(d)))) for i, d in enumerate(docs)]
-        return sorted(scored, key=lambda p: -p[1])[:top_n]
+    def embed(self, texts):
+        out = []
+        for t in texts:
+            v = [0.0] * 256
+            for w in re.findall(r"[a-z]{3,}", t.lower()):
+                v[int(hashlib.md5(w.encode()).hexdigest(), 16) % 256] += 1.0
+            out.append(_unit(v))
+        return out
 
 
 class Memory:
-    def __init__(self, store, ranker, same=0.75):
+    def __init__(self, store, embedder, same=0.85):
         self.store = store
-        self.ranker = ranker
+        self.embedder = embedder
         self.same = same
+        self._lock = threading.Lock()
 
     @property
     def name(self):
-        return self.ranker.name
+        return self.embedder.name
 
     def available(self):
-        return self.ranker.available()
+        return self.embedder.available()
 
-    def recall(self, subject, text, exclude=None, limit=100):
-        """Earlier scams this one is the same script as: [(thread id, score)], best first."""
-        rows = self.store.q("SELECT id, scam_subject, scam_text FROM threads WHERE id != ? AND scam_text IS NOT NULL "
-                            "AND scam_text != '' ORDER BY id DESC LIMIT ?", (exclude or -1, limit))
-        if not rows or not self.available():
+    def _vectors(self, rows):
+        """{thread id: vector} for these rows, asking Pinecone only for the ones not on disk yet."""
+        out, todo = {}, []
+        for r in rows:
+            v = unpack(r["vec"]) if r["vec"] else None
+            if v:
+                out[r["id"]] = v
+            elif r["scam_text"]:
+                todo.append(r)
+        if todo:
+            for r, v in zip(todo, self.embedder.embed([scam_text(r["scam_text"]) for r in todo])):
+                self.store.update_thread(r["id"], vec=pack(v))
+                out[r["id"]] = v
+        return out
+
+    def recall(self, tid, limit=500):
+        """Other scams this one is the same script as: [(thread id, score)], best first, at most five."""
+        rows = self.store.q("SELECT id, scam_text, vec FROM threads WHERE scam_text IS NOT NULL AND scam_text != '' "
+                            "ORDER BY id DESC LIMIT ?", (limit,))
+        if not any(r["id"] == tid for r in rows) or not self.available():
             return []
-        hits = self.ranker.rank(scam_doc(subject, text), [scam_doc(r["scam_subject"], r["scam_text"]) for r in rows],
-                                top_n=min(5, len(rows)))
-        return [(rows[i]["id"], round(s, 3)) for i, s in hits if s >= self.same]
+        with self._lock:
+            vecs = self._vectors(rows)
+        mine = vecs.get(tid)
+        if not mine:
+            return []
+        scored = sorted(((k, round(cosine(mine, v), 3)) for k, v in vecs.items() if k != tid), key=lambda p: -p[1])
+        return [(k, s) for k, s in scored[:5] if s >= self.same]
 
     def remember(self, tid):
         """Work out and keep a thread's kin. Returns the list, or None when there's no memory to ask."""
         t = self.store.thread(tid)
         if not t or not t["scam_text"] or not self.available():
             return None
-        kin = self.recall(t["scam_subject"], t["scam_text"], exclude=tid)
+        kin = self.recall(tid)
         self.store.update_thread(tid, kin=json.dumps(kin))
         return kin
 

@@ -89,9 +89,12 @@ class Store:
             self.db.executescript(SCHEMA)
             # Columns added after the first deploy: a disk made by an older Uncle gets them here.
             have = {r["name"] for r in self.db.execute("PRAGMA table_info(threads)").fetchall()}
-            for col, kind in (("kin", "TEXT"),):
+            for col, kind in (("kin", "TEXT"), ("vec", "TEXT")):
                 if col not in have:
                     self.db.execute(f"ALTER TABLE threads ADD COLUMN {col} {kind}")
+            if "vec" not in have:
+                # Kin worked out with the old reranker gets redone with embeddings on the next rounds.
+                self.db.execute("UPDATE threads SET kin=NULL")
 
     # -- generic helpers
     def q(self, sql, args=()):

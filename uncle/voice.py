@@ -12,8 +12,8 @@ import time
 
 from . import gateway, net
 
-# Deepgram's only "mature" American man in Aura-2: enthusiastic, approachable, friendly. Keen Uncle.
-MODEL = "aura-2-atlas-en"
+# Pluto: smooth, calm, a baritone. Picked by ear over Atlas, Deepgram's one "mature" American man.
+MODEL = "aura-2-pluto-en"
 MAX_CHARS = 1900  # Deepgram takes up to 2,000 characters a request
 DAY = 86400
 
