@@ -612,6 +612,7 @@ class FlowTests(unittest.TestCase):
         self.assertEqual((ask["kind"], ask["to"]), ("send", OWNER))
         self.assertIn("I'd like to write to: barrister.okoro77@gmail.com", ask["text"])
         self.assertIn(friend, ask["text"])  # the boss sees who sent it; the page never does
+        self.assertIn("Only say yes if you know who sent it", ask["text"])
         t = self.app.store.q("SELECT * FROM threads")[0]
         self.assertEqual(t["status"], "pending_approval")
         self.assertNotIn(friend, self.app.home_html())

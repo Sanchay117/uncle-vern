@@ -490,6 +490,8 @@ class Engine:
         res = self.mail.send(self.cfg.inbox, self.cfg.owner_emails[0], f"A friend sent me a scam: {scam['subject']}"[:150], (
             f"Somebody ({sender}) forwarded me {kind_a(kind)} scam. {self.jev.name} puts it at {pct(p)}.\n\n"
             f"I'd like to write to: {to}\n\n"
+            "Only say yes if you know who sent it. A stranger could fake a forward to set me on someone "
+            "innocent.\n\n"
             f"Here's my letter:\n\n{letter}\n\n"
             "Reply \"yes\" and I'll send it. Reply \"no\" and I'll leave them be.\n\nVern")) or {}
         self.store.update_thread(tid, owner_thread_id=res.get("thread_id"), owner_message_id=res.get("message_id"))
