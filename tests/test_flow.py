@@ -83,6 +83,29 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(p["reply_to"], "claims@lotto-agent.example")
         self.assertIn("You won", p["body"])
 
+    def test_outlook_forwards(self):
+        body = "I hope you don't mind me reaching out this way! I came across your profile."
+        web_text = ("andrea.w@gmail.com\n\n________________________________\nFrom: Andrea <andreawendy@proton.me>\n"
+                    "Sent: Monday, November 2, 2026 3:26 AM\nTo: Student <student@uni.example>\n"
+                    f"Subject: Thought I'd reach out.\n\n{body}")
+        web_html = ('<div>andrea.w@gmail.com</div><hr style="display:inline-block;width:98%" tabindex="-1">'
+                    '<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri" style="font-size:11pt"><b>From:</b> '
+                    'Andrea &lt;andreawendy@proton.me&gt;<br><b>Sent:</b> Monday, November 2, 2026 3:26 AM<br>'
+                    '<b>To:</b> Student &lt;student@uni.example&gt;<br><b>Subject:</b> Thought I\'d reach out.'
+                    f'</font><div>&nbsp;</div></div><div>{body}</div>')
+        desktop = ("andrea.w@gmail.com\n\n-----Original Message-----\nFrom: Andrea <andreawendy@proton.me>\n"
+                   "Sent: Monday, November 2, 2026 3:26 AM\nTo: student@uni.example\n"
+                   f"Subject: Thought I'd reach out.\n\n{body}")
+        for msg in ({"text": web_text}, {"html": web_html}, {"text": desktop}):
+            p = intake.extract_scam(msg, lambda _: None, {"student@uni.example", INBOX})
+            self.assertIsNotNone(p, msg)
+            self.assertEqual(p["from_addr"], "andreawendy@proton.me")
+            self.assertEqual(p["subject"], "Thought I'd reach out.")
+            self.assertTrue(p["body"].startswith("I hope you don't mind"), p["body"])
+            self.assertEqual(p["candidates"][0], "andrea.w@gmail.com")  # the typed reply-to wins
+            self.assertNotIn("student@uni.example", p["candidates"])
+        self.assertTrue(intake.looks_forwarded({"subject": "FW: Thought I'd reach out.", "text": web_text}))
+
     def test_no_forward(self):
         self.assertIsNone(intake.parse_forward("hey uncle how are you"))
 

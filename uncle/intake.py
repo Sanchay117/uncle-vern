@@ -28,10 +28,13 @@ def addresses(text):
 
 def strip_html(s):
     s = re.sub(r"(?is)<(script|style).*?</\1>", " ", s or "")
+    # Outlook on the web marks a forward with a rule line before the From: header.
+    s = re.sub(r"(?i)<hr\b[^>]*>", "\n________________________________\n", s)
     s = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>|</li>", "\n", s)
     s = re.sub(r"<[^>]+>", " ", s)
     s = html.unescape(s)
-    s = re.sub(r"[ \t\r\f\v]+", " ", s)
+    s = re.sub(r"[ \t\r\f\v\xa0]+", " ", s)
+    s = re.sub(r"(?m)^ +| +$", "", s)  # tags left spaces at the start of lines like " From:"
     return re.sub(r"\n\s*\n\s*\n+", "\n\n", s).strip()
 
 
