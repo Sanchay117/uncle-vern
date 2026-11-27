@@ -121,6 +121,13 @@ class Engine:
             _, sender = addr_of(msg.get("from"))
             if sender == self.cfg.inbox:
                 return "self"
+            if "spam" in (msg.get("labels") or []) and sender not in self.cfg.owner_emails and not (
+                    (msg.get("thread_id") and self.store.thread_by_am(msg["thread_id"]))
+                    or self.store.active_by_scammer(sender)):
+                # Spam from the boss is a forwarded scam and spam from a pen pal is a reply; the rest is noise.
+                if self.store.claim_message(message_id, msg.get("thread_id"), sender):
+                    self.store.finish_message(message_id, "spam")
+                return "spam"
             if not self.store.claim_message(message_id, msg.get("thread_id"), sender):
                 return "duplicate"
             try:

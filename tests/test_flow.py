@@ -417,6 +417,15 @@ class FlowTests(unittest.TestCase):
                                     thread_id="some-other-thread")
         self.assertEqual(self.eng.handle(mid4), "scammer")
 
+    def test_spam_only_counts_from_the_boss_or_a_pen_pal(self):
+        mid, _ = self.mail.deliver("random@spammer.example", "Cheap pills", "Buy now, kindly reply.")
+        self.mail.messages[mid]["labels"].append("spam")
+        self.assertEqual(self.eng.handle(mid), "spam")
+        self.assertEqual(self.mail.outbox, [])
+        fwd, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.mail.messages[fwd]["labels"].append("spam")
+        self.assertEqual(self.eng.handle(fwd), "intake")
+
     def test_resend_approval(self):
         mid, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
         self.eng.handle(mid)

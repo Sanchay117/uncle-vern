@@ -168,7 +168,9 @@ def make_handler(app):
             if path == "/webhook/agentmail":
                 # The webhook only tells Uncle where to look. He re-reads the message from his
                 # own inbox through the gateway, so a forged webhook can't put words in it.
-                if data.get("event_type") == "message.received":
+                # message.received and its variants (spam included); a blocked message was never stored.
+                event = str(data.get("event_type") or "")
+                if event.startswith("message.received") and not event.endswith(".blocked"):
                     mid = (data.get("message") or {}).get("message_id")
                     if mid:
                         app.jobs.put(("message", mid))

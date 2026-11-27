@@ -65,7 +65,8 @@ class AgentMail:
         raise net.HttpError(404, "message not found in its thread", message_id)
 
     def list_messages(self, inbox_id, limit=50):
-        return self._call("GET", f"/inboxes/{_q(inbox_id)}/messages?limit={limit}")
+        # AgentMail files forwarded scams and scammers' replies under spam, which a plain listing hides.
+        return self._call("GET", f"/inboxes/{_q(inbox_id)}/messages?limit={limit}&include_spam=true")
 
     def get_attachment(self, inbox_id, message_id, attachment_id):
         meta = self._call("GET", f"/inboxes/{_q(inbox_id)}/messages/{_q(message_id)}/attachments/{_q(attachment_id)}")
