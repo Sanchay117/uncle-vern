@@ -130,6 +130,20 @@ def candidates(parsed, exclude):
     return order
 
 
+# Free mail services anyone can sign up to. Scammers' own reply addresses are nearly always on one of these;
+# an organisation's own domain is more often a hacked mailbox or a real business.
+WEBMAIL = re.compile(
+    r"(gmail|googlemail|yahoo|ymail|rocketmail|outlook|hotmail|live|msn|aol|icloud|me|mac|mail|email|gmx|"
+    r"proton|protonmail|pm|tutamail|tutanota|tuta|keemail|zoho|zohomail|yandex|inbox|qq|163|126|sina|rediffmail|"
+    r"usa|post|consultant|europe|asia|engineer|writeme|dr|onionmail|mailfence|fastmail|hushmail|naver|daum)"
+    r"\.[a-z.]{2,7}$")
+
+
+def webmail(addr):
+    """True when the address is on a free mail service rather than an organisation's own domain."""
+    return bool(WEBMAIL.fullmatch((addr or "").rsplit("@", 1)[-1].lower()))
+
+
 def looks_forwarded(message):
     """True when someone is passing along another person's email: a Fwd: subject, a forward
     marker in the body, or an attached .eml."""

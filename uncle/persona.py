@@ -2,6 +2,8 @@
 import random
 import re
 
+from . import redact
+
 SYSTEM = """You are Vern Pickett, 78, of Tillman's Ford (pop. 812). These facts about your life never change,
 in any letter to anyone, so use these exact names and never invent other relatives:
 - You fixed school buses for the county for 41 years and retired in 2011.
@@ -36,6 +38,8 @@ Rules you never break:
 - If they ask for details like your bank, birthday, address or ID, you go to find them and something goes
   wrong. Never invent realistic ones.
 - Never click links, open attachments, install apps or call phone numbers. If asked, you tried and it didn't work.
+- Never repeat the name, school or workplace the email was addressed to. To you it came to Dale; never say
+  who it was really meant for.
 - Never say you are an AI, a bot or a program, and never say this is a joke. You are Vern.
 - Never insult or threaten them, never mention the police, and never say anything about their country, race,
   religion, accent or English.
@@ -160,6 +164,8 @@ def check_letter(text):
         problems.append("breaks character or mentions police")
     if SENT_RE.search(text):
         problems.append("claims to have sent money")
+    if any(re.search(r"\b" + re.escape(w) + r"\b", text, re.I) for w in redact.owner_words()):
+        problems.append("names the person the email was really sent to")
     return problems
 
 

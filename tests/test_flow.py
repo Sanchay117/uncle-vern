@@ -132,6 +132,26 @@ class RedactTests(unittest.TestCase):
         self.assertIn("Barrister", t)
 
 
+    def test_uncle_never_names_who_the_scam_was_sent_to(self):
+        ok = "Dear friend, " + "I am so happy to hear from you about this. " * 8 + "\n\nVern"
+        os.environ["REDACT_WORDS"] = "Priya, Example Institute"
+        try:
+            self.assertIn("names the person the email was really sent to",
+                          persona.check_letter("He said it was meant for some young fella named Priya. " + ok))
+            self.assertIn("names the person the email was really sent to",
+                          persona.check_letter("Something from example institute. " + ok))
+            self.assertEqual(persona.check_letter(ok), [])
+        finally:
+            del os.environ["REDACT_WORDS"]
+
+    def test_webmail_or_an_organisations_own_domain(self):
+        for a in ("mail2offline@gmail.com", "ggmailbox@tutamail.com", "x@yahoo.co.uk", "y@outlook.com",
+                  "z@proton.me", "w@hotmail.fr"):
+            self.assertTrue(intake.webmail(a), a)
+        for a in ("sumaish@corizo.in", "info@bda.com.sa", "alphaport625@c4c.ecoknights.org.my",
+                  "x@mail.example-corp.com"):
+            self.assertFalse(intake.webmail(a), a)
+
     def test_owner_words_hidden_everywhere(self):
         os.environ["REDACT_WORDS"] = "Priya Rao, Example Institute"
         try:
@@ -395,6 +415,7 @@ class FlowTests(unittest.TestCase):
         approval = self.mail.outbox[-1]
         self.assertEqual(approval["kind"], "reply")
         self.assertIn("claims.desk@barrister-office.example", approval["text"])
+        self.assertIn("Careful: barrister-office.example isn't a free email service", approval["text"])
         self.assertIn("Reply \"yes\"", approval["text"])
         t = self.app.store.q("SELECT * FROM threads")[0]
         self.assertEqual(t["status"], "pending_approval")

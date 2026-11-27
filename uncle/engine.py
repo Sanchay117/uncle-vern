@@ -526,9 +526,13 @@ class Engine:
             return None
 
     def _ask_approval(self, msg, tid, kind, p, to, letter):
+        domain = (to or "").rsplit("@", 1)[-1]
+        careful = "" if intake.webmail(to) else (
+            f"Careful: {domain} isn't a free email service. It could be a real business, or a mailbox the "
+            "scammer broke into. Say yes only if you're sure it's theirs.\n\n")
         otid = self._tell_owner(msg, (
             f"This one's {kind_a(kind)} scam. {self.jev.name} puts it at {pct(p)}.\n\n"
-            f"I'd like to write to: {to}\n\n"
+            f"I'd like to write to: {to}\n\n{careful}"
             "Here's my letter:\n\n"
             f"{letter}\n\n"
             "Reply \"yes\" and I'll send it. Reply \"no\" and I'll leave them be.\n\nVern"))

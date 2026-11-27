@@ -18,13 +18,15 @@ def bar(s):
     return BLOCK_CHAR * max(3, min(22, len(s)))
 
 
-def private(text):
-    """Black out the owner's own words (REDACT_WORDS, comma separated: their name, college, employer).
+def owner_words():
+    """The owner's own words (REDACT_WORDS, comma separated: their name, college, employer)."""
+    return [w for w in (w.strip() for w in os.environ.get("REDACT_WORDS", "").split(",")) if len(w) > 2]
 
-    Safe for Uncle's letters too, which otherwise go up as written."""
-    for w in (w.strip() for w in os.environ.get("REDACT_WORDS", "").split(",")):
-        if len(w) > 2:
-            text = re.sub(re.escape(w), lambda m: bar(m.group()), text or "", flags=re.I)
+
+def private(text):
+    """Black out the owner's own words. Safe for Uncle's letters too, which otherwise go up as written."""
+    for w in owner_words():
+        text = re.sub(re.escape(w), lambda m: bar(m.group()), text or "", flags=re.I)
     return text or ""
 
 
