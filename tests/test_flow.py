@@ -426,6 +426,21 @@ class FlowTests(unittest.TestCase):
         self.mail.messages[fwd]["labels"].append("spam")
         self.assertEqual(self.eng.handle(fwd), "intake")
 
+    def test_bounce_closes_the_thread_and_tells_the_boss(self):
+        t, sent = self.forward_and_approve()
+        mid, _ = self.mail.deliver("MAILER-DAEMON@amazonses.example", "Delivery Status Notification (Failure)",
+                                   "An error occurred while trying to deliver the mail to the following "
+                                   "recipients:\nclaims.desk@barrister-office.example")
+        self.assertEqual(self.eng.handle(mid), "bounce")
+        t = self.app.store.thread(t["id"])
+        self.assertEqual((t["status"], t["close_reason"]), ("closed", "their address bounced"))
+        self.assertIn("bounced", self.mail.outbox[-1]["text"])
+
+    def test_awake_hold_is_harmless_off_a_sprite(self):
+        from uncle import awake
+        with awake.held():
+            pass
+
     def test_resend_approval(self):
         mid, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
         self.eng.handle(mid)

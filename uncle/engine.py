@@ -88,6 +88,13 @@ def pct(p):
     return f"{round(p * 100)}%"
 
 
+def is_bounce(sender, subject):
+    local = (sender or "").split("@")[0]
+    subject = (subject or "").lower()
+    return local in ("mailer-daemon", "postmaster") or subject.startswith(
+        ("delivery status notification", "undeliverable", "undelivered mail", "mail delivery failed"))
+
+
 def _err(exc):
     """'HttpError 403: {"error": ...}' for the private diary."""
     return f"{exc.__class__.__name__} {getattr(exc, 'status', '')}: {str(getattr(exc, 'body', '') or exc)[:160]}"
@@ -162,6 +169,8 @@ class Engine:
     # ------------------------------------------------------------ routing
     def _route(self, msg, sender):
         tid = msg.get("thread_id")
+        if is_bounce(sender, msg.get("subject")):
+            return "bounce", self._bounce(msg)
         if sender in self.cfg.owner_emails:
             pending = self.store.pending_by_owner_thread(tid) if tid else None
             if pending and pending["status"] == "pending_approval":
@@ -261,7 +270,7 @@ class Engine:
                                      am_thread_id=res.get("thread_id") or thread["am_thread_id"])
             self.store.add_letter(tid, "uncle", res.get("message_id"), thread["draft"], redact.private(thread["draft"]),
                                   sent_at=now)
-            self.store.note("The boss said yes. First letter's in the mail. Now I wait, and waiting is free.", tid)
+            self.store.note("The boss said yes. First letter's in the mail. Now I wait.", tid)
             otid = self._tell_owner(msg, f"Sent. I'll tell you when they bite. You can watch here: "
                                          f"{self.cfg.public_url}/t/{tid}\n\nVern")
             if otid and otid != thread["owner_thread_id"]:
@@ -345,6 +354,23 @@ class Engine:
                              f"They bit! The scammer wrote back. Watch it unfold: {self.cfg.public_url}/t/{tid}"
                              "\n\nVern")
         return tid
+
+    def _bounce(self, msg):
+        """A mail server says a letter couldn't be delivered: the scammer's mailbox is gone."""
+        text = msg.get("text") or msg.get("extracted_text") or intake.strip_html(msg.get("html") or "")
+        failed = set(intake.addresses(text))
+        for t in self.store.active_threads():
+            if (t["scammer_addr"] or "").lower() in failed:
+                self.store.update_thread(t["id"], status="closed", close_reason="their address bounced")
+                self.store.note("My letter came back marked undeliverable. Somebody shut their mailbox down "
+                                "before I got going. Shame, I had a lot to say.", t["id"])
+                if self.cfg.owner_emails:
+                    self._tell_owner({"message_id": t["owner_message_id"], "thread_id": t["owner_thread_id"],
+                                      "from": self.cfg.owner_emails[0], "subject": "Undeliverable"},
+                                     f"My letter to {t['scammer_addr']} bounced. Their mail service has shut "
+                                     "that address down, so that one's over. Send me another!\n\nVern")
+                return t["id"]
+        return None
 
     def _answer(self, message_id, to, subject, text):
         """Reply in a thread. The Fly AgentMail connector refuses message ids containing '=' (most

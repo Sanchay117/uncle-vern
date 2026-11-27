@@ -279,21 +279,44 @@ FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
          '<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Courier+Prime&'
          'family=Libre+Caslon+Text:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">')
 
-SCENE = """<svg class="scene" viewBox="0 0 1000 150" fill="none" stroke="currentColor" stroke-width="2"
- stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-<path d="M0 132 H1000" />
-<path d="M120 132 V78 L170 44 L220 78 V132" /><path d="M110 85 L170 40 L230 85" stroke="#b8321f" stroke-width="3"/>
-<rect x="150" y="98" width="22" height="34" /><rect x="185" y="88" width="22" height="18" /><path d="M196 88 V106 M185 97 H207"/>
-<path d="M205 52 V36 H216 V62" />
-<path d="M262 132 V102 M262 102 h40 v14 h-40 z" /><path d="M302 102 l10 -8 v16" stroke="#b8321f" stroke-width="2.5"/>
-<path d="M330 132 V112 M350 132 V112 M370 132 V112 M390 132 V112 M410 132 V112 M325 118 H415 M325 126 H415" />
-<path d="M520 132 c4 -10 22 -12 34 -8 c10 -10 24 -10 30 2 c6 -2 12 2 12 6" />
-<path d="M592 126 c4 -3 9 -2 11 1" /><circle cx="598" cy="124" r="1" fill="currentColor"/>
-<path d="M700 132 v-14 c0 -8 6 -12 14 -12 h34 l14 -12 h46 l14 12 h26 c8 0 12 4 12 12 v14" />
-<circle cx="730" cy="132" r="11" fill="var(--table)"/><circle cx="830" cy="132" r="11" fill="var(--table)"/>
-<path d="M764 106 l12 -10 h40 l12 10 z" />
-<text x="996" y="112" font-family="Caveat,cursive" font-size="22" fill="currentColor" stroke="none" text-anchor="end">Tillman's Ford</text>
+# Vern's street, left to right: his house, the mailbox (flag up: a letter came), Doug the ferret,
+# the Buick he keeps mentioning, and the town sign. Labels are handwritten so nobody has to guess.
+SCENE = """<svg class="scene" viewBox="0 0 1000 175" fill="none" stroke="currentColor" stroke-width="2"
+ stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Vern's street: his house, his mailbox
+ with the flag up, Doug the ferret, his Buick and the Tillman's Ford town sign">
+<g font-family="Caveat,cursive" font-size="25" fill="currentColor" stroke="none" opacity=".75" text-anchor="middle">
+<text x="150" y="34">Vern's place</text><text x="268" y="62">mail's here</text>
+<text x="498" y="100">Doug</text><text x="712" y="58">the Buick</text></g>
+<path d="M0 150 H1000" />
+<path d="M100 150 V96 L150 60 L200 96 V150" /><path d="M90 103 L150 56 L210 103" stroke="#b8321f" stroke-width="3"/>
+<rect x="128" y="114" width="22" height="36" /><rect x="163" y="104" width="22" height="18" />
+<path d="M174 104 V122 M163 113 H185" /><path d="M182 74 V48 H194 V82" />
+<path d="M262 150 V114" /><path d="M244 114 V104 Q244 96 252 96 H276 Q284 96 284 104 V114 Z" />
+<path d="M284 106 H291 V82 H303 V91 H291" stroke="#b8321f" stroke-width="2.5"/>
+<path d="M330 150 V124 M355 150 V124 M380 150 V124 M405 150 V124 M322 132 H413 M322 142 H413" />
+<ellipse cx="498" cy="137" rx="30" ry="7.5" fill="var(--table)" />
+<circle cx="532" cy="132" r="7" fill="var(--table)" /><path d="M529 125.5 l2 -4 l3 3.5" />
+<circle cx="535" cy="131" r="1" fill="currentColor" stroke="none" /><circle cx="539.5" cy="134" r="1.2" fill="currentColor" stroke="none" />
+<path d="M469 135 C458 130 452 124 444 127" /><path d="M478 143 V150 M488 144 V150 M508 144 V150 M518 143 V150" />
+<path d="M600 138 V121 Q600 113 609 112 L652 108 L674 88 L752 88 L774 107 L812 110 Q822 111 822 121 V138
+ H802 A17 17 0 0 0 768 138 H662 A17 17 0 0 0 628 138 Z" fill="var(--table)" />
+<path d="M680 106 L692 94 L716 94 L716 106 Z M722 106 L722 94 L746 94 L760 106 Z" />
+<path d="M606 122 H816" stroke-width="1.5" /><circle cx="607" cy="117" r="2.5" />
+<circle cx="645" cy="138" r="12" fill="var(--table)" /><circle cx="645" cy="138" r="4" />
+<circle cx="785" cy="138" r="12" fill="var(--table)" /><circle cx="785" cy="138" r="4" />
+<path d="M922 150 V106" /><rect x="848" y="64" width="148" height="42" rx="3" fill="var(--table)" />
+<g font-family="'Courier Prime',monospace" fill="currentColor" stroke="none" text-anchor="middle">
+<text x="922" y="83" font-size="13.5" font-weight="700" textLength="128" lengthAdjust="spacingAndGlyphs">TILLMAN'S FORD</text>
+<text x="922" y="99" font-size="12">pop. 812</text></g>
 </svg>"""
+
+
+# An airmail envelope with a red stamp, to match the stripe across the top of every page.
+FAVICON = "data:image/svg+xml," + urllib.parse.quote(re.sub(r"\s+", " ", """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>
+<rect x='4' y='14' width='56' height='38' rx='5' fill='#f6efe1' stroke='#1f1b16' stroke-width='4'/>
+<path d='M6 17 L32 37 L58 17' fill='none' stroke='#1f1b16' stroke-width='4' stroke-linejoin='round'/>
+<rect x='41' y='22' width='12' height='14' fill='#b8321f'/>
+<path d='M6 48 l6 -6 M14 50 l6 -6 M22 50 l6 -6' stroke='#2b4c8c' stroke-width='3'/></svg>""").strip(), safe="")
 
 
 def page(title, body, desc="Uncle Vern answers scam emails, at length, so scammers waste their time on him."):
@@ -301,7 +324,7 @@ def page(title, body, desc="Uncle Vern answers scam emails, at length, so scamme
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title><meta name="description" content="{esc(desc)}">
 <meta property="og:title" content="{esc(title)}"><meta property="og:description" content="{esc(desc)}">
-<meta name="theme-color" content="#e9dfcb">
+<meta name="theme-color" content="#e9dfcb"><link rel="icon" href="{FAVICON}">
 {FONTS}<style>{CSS}</style></head><body>{FILTERS}<div class="airmail"></div><div class="wrap">{body}</div>
 <script>{ODO_JS}</script></body></html>"""
 
@@ -385,14 +408,16 @@ def thread_card(t, letters):
 <p><b>{who}:</b> {letter_body(last[:400])}</p></a>"""
 
 
-def desk(latest_scam):
+def desk(latest_scam, letters_out=0):
     """Hero still life: the newest real scammer letter under Uncle's sticky note."""
     if latest_scam:
         sheet = (f'<div class="paper office sheet"><div class="head"><span>Received</span><span>{esc(ago(latest_scam["sent_at"]))}</span></div>'
                  f'<div class="body">{letter_body(latest_scam["public_body"][:520])}</div></div>')
     else:
+        waiting = (f"{letters_out} {'letter is' if letters_out == 1 else 'letters are'} in the mail. I check "
+                   "the box after my oatmeal." if letters_out else "My first letters go out soon.")
         sheet = ('<div class="paper office sheet"><div class="head"><span>Uncle\'s in-tray</span><span>empty</span></div>'
-                 '<div class="body">No scammer has written back yet.\n\nThe first letters go out this weekend.</div></div>')
+                 f'<div class="body">No scammer has written back yet.\n\n{esc(waiting)}</div></div>')
     return f"""<div class="desk"><div class="paper office sheet under"></div>{sheet}
 <div class="sticky">Send me your scams. I've got all the time in the world.<small>Uncle V.</small></div></div>"""
 
@@ -411,7 +436,7 @@ def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, lat
 Western Union is nearest the Piggly Wiggly. <b>Every hour a scammer spends on Uncle is an hour they don't spend
 on someone's grandma.</b></p>
 <div class="ctas"><a class="btn" href="#try">Try him on a scam</a><a class="btn ghost" href="#mailbag">Read the mailbag</a></div>
-</div>{desk(latest_scam)}</section>
+</div>{desk(latest_scam, totals.get('uncle_letters') or 0)}</section>
 
 <div class="ledger">
 <div><b>{odo(totals['approached'])}</b><small>Scammers written to</small></div>
@@ -422,7 +447,7 @@ on someone's grandma.</b></p>
 <div><b>{money(meter.get('cost_usd'))}</b><small>Uncle's running cost, all in</small></div>
 </div>
 <p class="foot-note">Uncle has been awake {esc(dur(meter.get('awake_s', 0)))} in total, over {num(meter.get('wakes'))}
-wake-ups. The rest of the time he sleeps on a Fly.io Sprite, and a sleeping Sprite costs nothing. The cost is his
+wake-ups. The rest of the time he's asleep on a Fly.io Sprite, and the next letter wakes him. The cost is his
 own estimate from Fly's published rates and his CPU and memory meters.</p>
 
 <h2 id="mailbag">The mailbag <small>scammers' addresses, numbers, links and names are blacked out</small></h2>
@@ -483,7 +508,7 @@ def thread_page(cfg, meter, t, letters, diary):
                          f'<div class="paper office">{stamp}<div class="head"><span>Received · redacted copy</span></div>'
                          f'<div class="body">{letter_body(l["public_body"])}</div></div>{jl}</div>')
     if t["status"] == "active" and letters and letters[-1]["direction"] == "uncle":
-        parts.append('<p class="asleep">Uncle is asleep now, waiting on their reply. A sleeping Sprite costs nothing.</p>')
+        parts.append('<p class="asleep">Uncle is asleep now. Their reply will wake him.</p>')
     diary_html = "".join(f'<li><time>{esc(ago(d["at"]))}</time><span>{esc(d["text"])}</span></li>' for d in diary)
     status = {"active": "on the hook", "closed": f"closed: {t['close_reason'] or ''}"}.get(t["status"], t["status"])
     body = f"""{header(meter)}

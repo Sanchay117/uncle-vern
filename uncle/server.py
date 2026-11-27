@@ -6,7 +6,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import claude, clients, gateway, meter, web
+from . import awake, claude, clients, gateway, meter, web
 from .config import Config
 from .engine import Engine
 from .store import Store
@@ -74,10 +74,12 @@ class App:
         while True:
             kind, arg = self.jobs.get()
             try:
-                if kind == "message":
-                    self.engine.handle(arg)
-                elif kind == "catch_up":
-                    self.engine.catch_up()
+                # Without a hold the Sprite can pause mid-letter, after a webhook has had its 200.
+                with awake.held():
+                    if kind == "message":
+                        self.engine.handle(arg)
+                    elif kind == "catch_up":
+                        self.engine.catch_up()
             except Exception as exc:  # noqa: BLE001
                 self.store.note(f"Worker error: {exc}", kind="error", public=False)
 
