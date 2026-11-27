@@ -13,7 +13,7 @@ import threading
 import time
 import traceback
 
-from . import intake, net, persona, redact, websearch
+from . import awake, intake, net, persona, redact, websearch
 from .clients import choice, listed, listing, noul, p_yes, picked, score, scored
 
 DAY = 86400
@@ -193,7 +193,14 @@ class Engine:
         phrase = websearch.good_quote((listed(a, "quote") or [""])[0], text)
         if not phrase or not self.web or not self.web.available():
             return phrase, None
-        return phrase, self.pool.submit(self.web.check, phrase, wait)
+        return phrase, self.pool.submit(self._search, phrase, wait)
+
+    def _search(self, phrase, wait=90):
+        """A web search in the background. The Sprite pauses about 30 s after its last request, even mid-search,
+        so the search holds it awake until it's done."""
+        # Its own task name: holds share none, so one ending never lets go of another's.
+        with awake.held("uncle-web-" + hashlib.sha256(phrase.encode()).hexdigest()[:10], expire="5m"):
+            return self.web.check(phrase, wait)
 
     def _web_result(self, searching, timeout=45):
         """What the search found, or just {"phrase"} when it isn't back yet (a later round fills it in)."""
@@ -1019,7 +1026,7 @@ class Engine:
         if key not in self.try_searches:
             if len(self.try_searches) > 200:
                 self.try_searches.clear()
-            self.try_searches[key] = (phrase, self.pool.submit(self.web.check, phrase, 90))
+            self.try_searches[key] = (phrase, self.pool.submit(self._search, phrase, 90))
         return {"web_key": key, "web_name": self.web.name, "phrase": phrase}
 
     def try_web(self, key):
@@ -1031,6 +1038,10 @@ class Engine:
         if hit:
             return {"web": hit}
         if future.done():
+            exc = future.exception()
+            if exc and not getattr(future, "noted", False):
+                future.noted = True
+                self.store.note(f"The try box's web search failed ({_err(exc)}).", kind="error", public=False)
             return {"failed": True}  # an error, or today's searches are used up
         return {"pending": True}
 
