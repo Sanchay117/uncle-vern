@@ -17,7 +17,7 @@ So I built Uncle Vern. He's 78, retired from fixing school buses, and very keen 
 ## For judges: try it in 60 seconds
 
 1. Open https://uncle-vern-b6zgb.sprites.app on any device.
-2. Under **Try him**, tap **Use a sample scam** (or paste one of your own), then **Ask Uncle to write back**. His letter appears in about 10 seconds. Nothing is sent to anyone.
+2. Under **Try him**, tap **Use a real scam from his inbox** (or paste one of your own), then **Ask Uncle to write back**. In about 10 seconds you get the verdict: Claude's red flags, Pinecone matching it to the same letter from other addresses, and Apify finding it on scam-report sites. Then his letter. Nothing is sent to anyone.
 3. Under his letter, **Now you be the scammer**: write back as them, push him to pay, tap **Send as the scammer**, and see how he wriggles out of it.
 4. Scroll to **The mailbag** to read the real scammers he's writing to.
 

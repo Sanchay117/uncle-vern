@@ -103,7 +103,7 @@ class Store:
             # Columns added after the first deploy: a disk made by an older Uncle gets them here.
             have = {r["name"] for r in self.db.execute("PRAGMA table_info(threads)").fetchall()}
             for col, kind in (("kin", "TEXT"), ("vec", "TEXT"), ("flags", "TEXT"), ("web", "TEXT"),
-                              ("send_after", "REAL")):
+                              ("send_after", "REAL"), ("title", "TEXT")):
                 if col not in have:
                     self.db.execute(f"ALTER TABLE threads ADD COLUMN {col} {kind}")
             if "vec" not in have:

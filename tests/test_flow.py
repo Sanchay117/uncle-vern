@@ -1030,6 +1030,61 @@ class FlowTests(unittest.TestCase):
         self.assertIn("asks for a fee before you get paid", j["flags"])
         self.assertIn("j.flags", self.app.home_html())
 
+    def test_try_box_asks_the_memory_and_the_web(self):
+        # Nothing on file yet: the memory says it's new, and the web search runs in the background.
+        j = self.app.with_kin(self.eng.try_uncle(GMAIL_FORWARD, "1.2.3.4"))
+        self.assertEqual((j["kin"], j["kin_hidden"], j["compared"]), ([], 0, 0))
+        self.assertEqual(j["memory"], self.app.memory.name)
+        key = j["web_key"]
+        self.assertEqual(j["web_name"], "Apify")
+        self.eng.pool.shutdown(wait=True)  # let the search finish
+        r = self.eng.try_web(key)
+        self.assertEqual([f["site"] for f in r["web"]["found"]], ["scam-warnings.example"])
+        self.assertEqual(self.eng.try_web("nope"), {"failed": True})
+        # Once Uncle has the same scam in a public conversation, the try box links it, and the search is cached.
+        import concurrent.futures
+        self.eng.pool = concurrent.futures.ThreadPoolExecutor(3)
+        t, _ = self.forward_and_approve()
+        before = len(self.app.web.searcher.queries)
+        j = self.app.with_kin(self.eng.try_uncle(GMAIL_FORWARD, "1.2.3.5"))
+        self.assertEqual([k["id"] for k in j["kin"]], [t["id"]])
+        self.assertGreaterEqual(j["kin"][0]["alike"], 85)
+        self.assertNotIn("Okoro", j["kin"][0]["title"])
+        self.assertIn("found", j["web"])  # straight from the cache
+        self.assertEqual(len(self.app.web.searcher.queries), before)
+        # A conversation off the page is counted, never linked.
+        self.app.store.update_thread(t["id"], hidden=1)
+        j = self.app.with_kin(self.eng.try_uncle(GMAIL_FORWARD, "1.2.3.6"))
+        self.assertEqual((j["kin"], j["kin_hidden"]), ([], 1))
+
+    def test_the_try_box_sample_is_a_real_scam_from_his_inbox(self):
+        self.assertIn("Use a sample scam", self.app.home_html())  # nothing on file yet
+        t, _ = self.forward_and_approve()
+        mid, owner_tid = self.mail.deliver(OWNER, "Fwd: URGENT inheritance",
+                                           GMAIL_FORWARD.replace("claims.desk@barrister-office.example",
+                                                                 "other.desk@mailbox.example"))
+        self.eng.handle(mid)
+        y, _ = self.mail.deliver(OWNER, "Re: Fwd", "yes", thread_id=owner_tid)
+        self.eng.handle(y)
+        self.eng.rounds()
+        home = self.app.home_html()
+        self.assertIn("Use a real scam from his inbox", home)
+        self.assertIn('data-sample="', home)
+        sample = home.split('data-sample="')[1].split('"')[0]
+        self.assertIn("next of kin", sample)
+        for secret in ("barrister-office", "Okoro", "mailbox.example"):
+            self.assertNotIn(secret, sample)
+
+    def test_a_meaningless_subject_gets_uncles_own_title(self):
+        t, _ = self.forward_and_approve()
+        self.app.store.update_thread(t["id"], scam_subject="Test AF", title="Knocking on the right door?")
+        page = self.app.thread_html(t["id"])
+        self.assertIn("<h1>Knocking on the right door?</h1>", page)
+        self.assertIn("Uncle's name for this one", page.replace("&#x27;", "'"))
+        self.assertNotIn("Test AF", page)
+        self.assertNotIn("Test AF", self.app.home_html())
+        self.assertFalse(websearch.safe("Dear ███, I am the one you want"))
+
     def test_one_follow_up_after_a_day_of_silence(self):
         t, first = self.forward_and_approve()
         later = time.time() + 25 * 3600

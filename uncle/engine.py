@@ -174,6 +174,7 @@ class Engine:
         self.lock = threading.Lock()
         # Web searches run beside letter writing; one that outlasts its wait still finishes and is remembered.
         self.pool = concurrent.futures.ThreadPoolExecutor(3, thread_name_prefix="web")
+        self.try_searches = {}  # key -> (phrase, future): web searches the try box is waiting on
 
     # ------------------------------------------------------------ the verdict: why it's a scam
     def _questions(self, base):
@@ -973,7 +974,8 @@ class Engine:
             return {"error": err}
         # The decision and the letter at once, so a visitor waits for one model call, not two.
         # A letter written for something that turns out not to be a scam is simply thrown away.
-        with concurrent.futures.ThreadPoolExecutor(2) as pool:
+        with concurrent.futures.ThreadPoolExecutor(3) as pool:
+            recalled = pool.submit(self.memory.match_text, text) if self.memory and self.memory.available() else None
             decided = pool.submit(self.jev.ask, text, self._questions({
                 "is_scam": noul("Is this email a scam or fraud attempt: trying to get money, gift cards, crypto, "
                                 "personal or banking details, or remote access from the reader under false pretenses?"),
@@ -990,9 +992,47 @@ class Engine:
                         "letter": None, "note": f"{self.jev.name} thinks this is only {pct(p)} likely to be a scam. "
                                                 "Uncle only writes to scammers, so he's sitting this one out."}
             letter, _ = written.result()
-        return {"scam_prob": p, "scam_type": kind, "decider": self.jev.name, "letter": letter,
-                "flags": self._flags(a), "kind": kind_a(kind),
-                "note": "A practice letter. Nothing was sent to anyone."}
+            out = {"scam_prob": p, "scam_type": kind, "decider": self.jev.name, "letter": letter,
+                   "flags": self._flags(a), "kind": kind_a(kind),
+                   "note": "A practice letter. Nothing was sent to anyone."}
+            if recalled:
+                try:
+                    out["kin"], out["compared"] = recalled.result(timeout=20)
+                    out["memory"] = self.memory.name
+                except Exception as exc:  # noqa: BLE001  (a nicety: the letter matters more)
+                    self.store.note(f"The try box couldn't ask {self.memory.name} ({_err(exc)}).", kind="error",
+                                    public=False)
+        out.update(self._try_web(a, text))
+        return out
+
+    def _try_web(self, a, text):
+        """The web search for the try box: the answer at once when Uncle already looked, else a key to ask with."""
+        if not self.web or not self.web.available():
+            return {}
+        phrase = websearch.good_quote((listed(a, "quote") or [""])[0], text)
+        if not phrase:
+            return {}
+        hit = self.web.cached(phrase)
+        if hit:
+            return {"web": hit, "web_name": self.web.name}
+        key = hashlib.sha256(phrase.encode()).hexdigest()[:16]
+        if key not in self.try_searches:
+            if len(self.try_searches) > 200:
+                self.try_searches.clear()
+            self.try_searches[key] = (phrase, self.pool.submit(self.web.check, phrase, 90))
+        return {"web_key": key, "web_name": self.web.name, "phrase": phrase}
+
+    def try_web(self, key):
+        """How the try box's web search is getting on: {"web": result}, {"pending": True} or {"failed": True}."""
+        phrase, future = self.try_searches.get(key or "", (None, None))
+        if not phrase:
+            return {"failed": True}
+        hit = self.web.cached(phrase)
+        if hit:
+            return {"web": hit}
+        if future.done():
+            return {"failed": True}  # an error, or today's searches are used up
+        return {"pending": True}
 
     def try_reply(self, scam, turns, reply, ip):
         """Practice, round two: the visitor plays the scammer and Uncle answers, the same way he answers a

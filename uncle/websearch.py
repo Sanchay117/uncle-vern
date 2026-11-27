@@ -44,7 +44,7 @@ def safe(sentence):
     """Only a sentence the page would show unredacted goes out to the web: no addresses, links, numbers,
     names after a title, 'Dear <name>' greetings or the boss's own words."""
     s = (sentence or "").strip()
-    return bool(s) and redact.redact(s) == s
+    return bool(s) and redact.BLOCK_CHAR not in s and redact.redact(s) == s
 
 
 def good_quote(quote, text):
@@ -137,15 +137,20 @@ class WebCheck:
     def available(self):
         return self.searcher.available()
 
+    def cached(self, phrase):
+        """This week's search for this sentence, if Uncle already did one."""
+        hit = self.store.one("SELECT result FROM web_checks WHERE phrase=? AND at>=? ORDER BY at DESC",
+                             (phrase, time.time() - 7 * 86400)) if phrase else None
+        return json.loads(hit["result"]) if hit else None
+
     def check(self, phrase, wait=90):
         """{"phrase", "found": [{site, title, url}], "at"}, or None when Uncle can't look right now."""
         if not phrase or not self.available():
             return None
         now = time.time()
-        hit = self.store.one("SELECT result FROM web_checks WHERE phrase=? AND at>=? ORDER BY at DESC",
-                             (phrase, now - 7 * 86400))
+        hit = self.cached(phrase)
         if hit:
-            return json.loads(hit["result"])
+            return hit
         if self.store.one("SELECT COUNT(*) n FROM web_checks WHERE at>=?", (now - 86400,))["n"] >= self.per_day:
             return None
         result = {"phrase": phrase, "found": copies(phrase, self.searcher.search(phrase, wait=wait)), "at": now}

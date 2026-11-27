@@ -150,6 +150,18 @@ class Memory:
         scored = sorted(((k, round(cosine(mine, v), 3)) for k, v in vecs.items() if k != tid), key=lambda p: -p[1])
         return [(k, s) for k, s in scored[:5] if s >= self.same]
 
+    def match_text(self, text, limit=500):
+        """A pasted scam against every scam Uncle has had: ([(thread id, score)] at most five, how many compared)."""
+        if not (text or "").strip() or not self.available():
+            return [], 0
+        rows = self.store.q("SELECT id, scam_text, vec FROM threads WHERE scam_text IS NOT NULL AND scam_text != '' "
+                            "ORDER BY id DESC LIMIT ?", (limit,))
+        with self._lock:
+            vecs = self._vectors(rows)
+        mine = self.embedder.embed([scam_text(text)])[0]
+        scored = sorted(((k, round(cosine(mine, v), 3)) for k, v in vecs.items()), key=lambda p: -p[1])
+        return [(k, s) for k, s in scored[:5] if s >= self.same], len(vecs)
+
     def remember(self, tid):
         """Work out and keep a thread's kin. Returns the list, or None when there's no memory to ask."""
         t = self.store.thread(tid)

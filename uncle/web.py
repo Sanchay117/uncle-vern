@@ -208,6 +208,9 @@ margin:14px 0 0;max-width:62ch}
 margin:16px 0 0;max-width:62ch}
 .verdict ul{margin:6px 0 0;padding-left:20px}.verdict li{margin:2px 0}.verdict p{margin:8px 0 0;color:var(--soft)}
 .verdict a{color:var(--ink)}
+.dots::after{content:"";animation:dots 1.5s steps(4) infinite}
+@keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+@media (prefers-reduced-motion:reduce){.dots::after{animation:none;content:"..."}}
 .families{list-style:none;padding:0;margin:0;font:15px/1.6 system-ui,sans-serif}
 .families li{padding:10px 0;border-bottom:1px dashed rgba(0,0,0,.25)}
 
@@ -424,7 +427,7 @@ def thread_card(t, letters):
     fr = frustration_meter(t["frustration"]) if them else ""
     return f"""<a class="env" href="/t/{t['id']}">{postmark(round((t['scam_prob'] or 0) * 100))}
 <div class="tag">{esc(SCAM_LABEL.get(t['scam_type'], 'Scam'))}</div>
-<h3>{esc((redact.subject(t['scam_subject']) or 'A letter')[:80])}</h3>
+<h3>{esc((subject_of(t) or 'A letter')[:80])}</h3>
 <div class="meta">{esc(state)} · {len(uncle)} from Uncle</div>
 {fr}
 <p><b>{who}:</b> {letter_body(last[:400])}</p></a>"""
@@ -512,7 +515,7 @@ def thread_share(cfg, t, letters):
     """What the share card for one conversation says."""
     mine = [l for l in letters if l["direction"] == "uncle" and l["public_body"]]
     theirs = [l for l in letters if l["direction"] == "scammer"]
-    subject = redact.subject(t["scam_subject"]) or ""
+    subject = subject_of(t)
     title = f"Uncle Vern vs. \u201c{subject}\u201d" if subject else "Uncle Vern vs. a scammer"
     facts = [f"{SCAM_LABEL.get(t['scam_type'], 'Scam')} scam"]
     if t["status"] == "closed":
@@ -598,7 +601,8 @@ def desk(latest_scam, letters_out=0):
 
 
 def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, latest_scam=None, wakes=(),
-         card=None, families=(), memory_name=None, voice_name=None, web_name=None, capped_until=None):
+         card=None, families=(), memory_name=None, voice_name=None, web_name=None, capped_until=None,
+         sample=None):
     cards = "".join(thread_card(t, letters_by_thread.get(t["id"], [])) for t in threads) or \
         '<div class="empty">No pen pals yet. Uncle is sitting by the mailbox.</div>'
     diary_html = "".join(
@@ -631,7 +635,7 @@ typed, at {WRITE_WPM} a minute.</p>
 <form id="tryform"><textarea name="text" aria-label="A scam email" required
 placeholder="Paste a scam email here.&#10;&#10;Dear Beloved, I am Barrister ... you have been selected as next of kin to receive the sum of ..."></textarea>
 <p><button class="btn" type="submit">Ask Uncle to write back</button>
-<button class="btn ghost" type="button" id="sample">Use a sample scam</button></p></form>
+<button class="btn ghost" type="button" id="sample"{f' data-sample="{esc(sample)}"' if sample else ""}>{"Use a real scam from his inbox" if sample else "Use a sample scam"}</button></p></form>
 <div class="out" id="out"><div class="wait">Uncle's letter will appear here.</div></div>
 </div>
 {by_mail(cfg, capped_until)}
@@ -667,13 +671,19 @@ whole country. Uncle Vern is your own. · <a href="{esc(cfg.code_url)}">Code</a>
     return page("Uncle Vern answers scam emails", body, image=card, url=cfg.public_url + "/")
 
 
+def subject_of(t):
+    """What a conversation is called on the page: Uncle's own name for it when the scammer's subject line was
+    meaningless, else their subject line, redacted."""
+    return (t.get("title") or redact.subject(t.get("scam_subject")) or "").strip()
+
+
 def original_scam(t):
     """The scam the boss forwarded, redacted like every scammer letter."""
     return redact.redact(t.get("scam_text") or "", names=[t["scammer_name"]] if t.get("scammer_name") else [])
 
 
 def _titles(rows):
-    links = [f'<a href="/t/{r["id"]}">&ldquo;{esc((redact.subject(r["scam_subject"]) or "a letter")[:60])}&rdquo;</a>'
+    links = [f'<a href="/t/{r["id"]}">&ldquo;{esc((subject_of(r) or "a letter")[:60])}&rdquo;</a>'
              for r in rows]
     return links[0] if len(links) == 1 else ", ".join(links[:-1]) + " and " + links[-1]
 
@@ -771,8 +781,8 @@ def thread_page(cfg, meter, t, letters, diary, card=None, kin=None, memory_name=
     body = f"""{header(meter)}
 <div class="thread-head"><div class="tag" style="margin:0">{esc(SCAM_LABEL.get(t['scam_type'], 'Scam'))} ·
 {dn()} {round((t['scam_prob'] or 0) * 100)}% scam · {esc(status)}</div>
-<h1>{esc(redact.subject(t['scam_subject']) or 'A letter')}</h1>
-<p class="meta">The subject line, as the scammer wrote it.</p>
+<h1>{esc(subject_of(t) or 'A letter')}</h1>
+<p class="meta">{"Uncle's name for this one: their own subject line meant nothing." if t.get("title") else "The subject line, as the scammer wrote it."}</p>
 {frustration_meter(t['frustration']) if t['first_bite_at'] else ''}{kin_line(kin, memory_name)}{share_bar(cfg, t, card)}</div>
 <div class="conv">{''.join(parts)}</div>
 <h2>Uncle's diary for this one</h2><ul class="diary">{diary_html}</ul>
@@ -781,7 +791,7 @@ def thread_page(cfg, meter, t, letters, diary, card=None, kin=None, memory_name=
     n = sum(1 for l in letters if l["direction"] == "uncle")
     desc = (f"Uncle Vern, 78, is writing back to a scammer ({SCAM_LABEL.get(t['scam_type'], 'scam').lower()}). "
             f"{n} letter{'' if n == 1 else 's'} from Uncle so far.")
-    return page(f"Uncle Vern vs. {redact.subject(t['scam_subject']) or 'a scammer'}", body, desc,
+    return page(f"Uncle Vern vs. {subject_of(t) or 'a scammer'}", body, desc,
                 image=card, url=f"{cfg.public_url}/t/{t['id']}")
 
 
@@ -883,7 +893,9 @@ TRY_JS = r"""
     "identified as his next of kin to receive the sum of USD 4,500,000 in his estate.\n\nKindly reply with " +
     "your full name, phone number and bank details so the processing fee of USD 250 can be arranged and " +
     "the funds released to you. This is urgent and confidential.\n\nRegards,\nBarrister James Okoro";
-  document.getElementById('sample').addEventListener('click', function(){ f.text.value = SAMPLE; f.text.focus(); });
+  var sb = document.getElementById('sample');
+  if (sb.dataset.sample) SAMPLE = sb.dataset.sample;
+  sb.addEventListener('click', function(){ f.text.value = SAMPLE; f.text.focus(); });
   function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var near = 'qwertyuiopasdfghjklzxcvbnm';
@@ -904,6 +916,26 @@ TRY_JS = r"""
       el.textContent = text.slice(0, shown) + (typo ? wrong : '');
       setTimeout(step, 24);
     })();
+  }
+  function webLine(j){
+    var name = esc(j.web_name || 'Apify'), w = j.web;
+    if (!w) return name + ' is searching the web for one sentence of it, to see if it\'s already going round<span class="dots"></span>';
+    var q = '&ldquo;' + esc(w.phrase) + '&rdquo;', found = w.found || [];
+    if (!found.length) return name + ' searched the web for ' + q + ' and found no copies yet, so it may be a fresh one.';
+    return name + ' searched the web for ' + q + ' and found the same words on ' + found.length + ' other page' +
+      (found.length > 1 ? 's' : '') + ' where people post the scams they get: ' + found.slice(0, 5).map(function(x){
+        return '<a href="' + esc(x.url) + '" target="_blank" rel="noopener nofollow">' + esc(x.site) + '</a>'; }).join(', ') + '.';
+  }
+  function pollWeb(j, el, started){
+    if (!el) return;
+    if (Date.now() - started > 120000){ el.textContent = (j.web_name || 'Apify') + '\'s web search is taking too long this time.'; return; }
+    setTimeout(function(){
+      fetch('/api/try/web?k=' + encodeURIComponent(j.web_key)).then(function(r){ return r.json(); }).then(function(r){
+        if (r.web){ j.web = r.web; el.innerHTML = webLine(j); }
+        else if (r.failed){ el.textContent = (j.web_name || 'Apify') + '\'s web search didn\'t come back this time.'; }
+        else pollWeb(j, el, started);
+      }).catch(function(){ pollWeb(j, el, started); });
+    }, 4000);
   }
   var convo = null, n = 0;
   function uncleLetter(box, j, after){
@@ -953,12 +985,32 @@ TRY_JS = r"""
         if (j.error){ out.innerHTML = '<div class="wait">' + esc(j.error) + '</div>'; return; }
         var pct = Math.round(j.scam_prob * 100), kind = esc(String(j.scam_type).replace(/_/g, ' '));
         var h = '<p class="meta">' + esc(j.decider || 'Jev') + ' says ' + pct + '% scam (' + kind + ').</p>';
-        if (j.letter && j.flags && j.flags.length){
-          h = '<div class="verdict"><b>Yes, it\'s a scam.</b> ' + esc(j.decider || 'Jev') + ' puts it at ' + pct + '% (' + kind + '). The red flags:<ul>' +
-            j.flags.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+        if (j.letter){
+          h = '<div class="verdict"><b>Yes, it\'s a scam.</b> ' + esc(j.decider || 'Jev') + ' puts it at ' + pct + '% (' + kind + ').' +
+            (j.flags && j.flags.length ? ' The red flags:<ul>' + j.flags.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '') +
+            '</div>';
         }
         if (!j.letter){ out.innerHTML = h + '<div class="wait">' + esc(j.note) + '</div>'; return; }
+        if (j.memory){
+          var mem;
+          if (j.kin && j.kin.length){
+            mem = '<b>Seen this script before.</b> ' + esc(j.memory) + ' compared the wording with the ' + j.compared +
+              ' scams Uncle has had: it\'s the same letter as ' + j.kin.map(function(k){
+                return '<a href="/t/' + k.id + '">&ldquo;' + esc(k.title || 'a letter') + '&rdquo;</a> (' + k.alike + '% alike)'; }).join(', ') +
+              ', from ' + (j.kin.length > 1 ? 'other addresses' : 'another address') + '.';
+          } else if (j.kin_hidden){
+            mem = '<b>Seen this script before.</b> ' + esc(j.memory) + ' compared the wording: Uncle has had this same letter ' +
+              j.kin_hidden + ' time' + (j.kin_hidden > 1 ? 's' : '') + ' before, from other addresses.';
+          } else {
+            mem = esc(j.memory) + ' compared the wording with the ' + j.compared + ' scams Uncle has had: this one is new to him.';
+          }
+          h = h.replace(/<\/div>$/, '<p>' + mem + '</p></div>');
+        }
+        if (j.web || j.web_key){
+          h = h.replace(/<\/div>$/, '<p class="webline">' + webLine(j) + '</p></div>');
+        }
         out.innerHTML = h;
+        if (j.web_key) pollWeb(j, out.querySelector('.webline'), Date.now());
         convo = {scam: scam, turns: [{who: 'uncle', text: j.letter}]};
         uncleLetter(out, j, function(){ out.insertAdjacentHTML('beforeend', '<p class="meta">' + esc(j.note) + '</p>'); replyBox(out); });
       })

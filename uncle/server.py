@@ -5,6 +5,7 @@ import queue
 import re
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import awake, card, claude, clients, gateway, memory, meter, redact, voice, web, websearch
@@ -180,7 +181,7 @@ class App:
                         memory_name=self.memory.name if self.memory.available() else None,
                         voice_name=self.voice.name if self.voice.available() else None,
                         web_name=self.web.name if self.web.available() else None,
-                        capped_until=self._capped())
+                        capped_until=self._capped(), sample=self.sample_scam())
 
     def _capped(self):
         until = self.engine.mail_blocked_until()
@@ -232,6 +233,28 @@ class App:
             return None
         text = next((l["public_body"] for l in self._letters(t) if l["id"] == lid), None)
         return self.voice.audio(text) if text else None
+
+    def with_kin(self, j):
+        """Turn the try box's memory matches into public conversations it can link to."""
+        if "kin" in j:
+            public, hidden = [], 0
+            for k, score in j.pop("kin"):
+                t = self._public_thread(k)
+                if t:
+                    public.append({"id": k, "title": web.subject_of(t)[:60], "alike": round(score * 100)})
+                else:
+                    hidden += 1
+            j["kin"], j["kin_hidden"] = public, hidden
+        return j
+
+    def sample_scam(self):
+        """A real scam from Uncle's inbox for the try box, blacked out like on the page: one he's had more than
+        once, so his memory has something to find."""
+        for f in self.families():
+            for t in f["public"]:
+                if t.get("scam_text"):
+                    return web.original_scam(t)[:3000]
+        return None
 
     def with_voice(self, j):
         """Give a practice letter a link to hear it read, when Uncle has a voice."""
@@ -298,6 +321,9 @@ def make_handler(app):
                 m = re.fullmatch(r"/voice/(letter|try)/(\d+|[0-9a-f]{32})\.mp3", path)
                 if m:
                     return self._voice(*m.groups())
+                if path == "/api/try/web":
+                    q = urllib.parse.parse_qs(self.path.partition("?")[2])
+                    return self._json(200, app.engine.try_web((q.get("k") or [""])[0][:32]))
                 if path == "/api/stats":
                     return self._json(200, app.stats())
                 if path == "/healthz":
@@ -352,7 +378,8 @@ def make_handler(app):
                     return self._json(200, {"error": "Uncle dropped the phone. Try again in a minute."})
             if path == "/api/try":
                 try:
-                    return self._json(200, app.with_voice(app.engine.try_uncle(data.get("text", ""), self._ip())))
+                    return self._json(200, app.with_kin(app.with_voice(
+                        app.engine.try_uncle(data.get("text", ""), self._ip()))))
                 except Exception as exc:  # noqa: BLE001
                     app.store.note(f"Try box error: {exc}", kind="error", public=False)
                     return self._json(200, {"error": "Uncle dropped the phone. Try again in a minute."})
