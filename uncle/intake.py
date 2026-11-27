@@ -159,6 +159,26 @@ def looks_forwarded(message):
     return any(m.search(text) for m in FWD_MARKERS[:2])
 
 
+def pasted(message, exclude):
+    """A scam pasted into a fresh email (from a friend's screenshot, a chat, a forum post): the scammer's
+    address alone on the first line, the scam below it. Returns a parsed dict, or None."""
+    text = (message.get("text") or strip_html(message.get("html") or "")).strip()
+    lines = text.splitlines()
+    if not lines:
+        return None
+    first = lines[0].strip()
+    if not addresses(first) or len(first.split()) > 3:
+        return None
+    body = "\n".join(lines[1:]).strip()
+    if len(body.split()) < 25:
+        return None
+    subject = re.sub(r"^\s*(?:(?:fwd?|fw|re)\s*:\s*)+", "", message.get("subject") or "", flags=re.I).strip()
+    parsed = {"from_name": "", "from_addr": "", "reply_to": "", "subject": subject or "(no subject)",
+              "body": body, "note": first, "source": "pasted"}
+    parsed["candidates"] = candidates(parsed, exclude)
+    return parsed if parsed["candidates"] else None
+
+
 def extract_scam(message, fetch_attachment, exclude):
     """From an AgentMail message (dict) find the forwarded scam.
 

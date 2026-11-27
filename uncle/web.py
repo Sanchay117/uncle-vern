@@ -538,7 +538,8 @@ def by_mail(cfg):
         return ""
     return (f'<p class="bymail"><b>Or try him by email.</b> Forward a scam from your own inbox to '
             f'<a href="mailto:{esc(cfg.inbox)}">{esc(cfg.inbox)}</a>. The email wakes him up, and he mails you '
-            "the letter he'd send, usually within a minute. Nothing goes to the scammer.</p>")
+            "the letter he'd send, usually within a minute. Nothing goes to the scammer unless his boss reads "
+            "it and says yes.</p>")
 
 
 def desk(latest_scam, letters_out=0):

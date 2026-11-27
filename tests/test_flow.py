@@ -131,6 +131,15 @@ class RedactTests(unittest.TestCase):
             self.assertNotIn(leak, t)
         self.assertIn("Barrister", t)
 
+    def test_the_name_a_scam_was_addressed_to_is_hidden(self):
+        t = redact.redact("Dear Priya Rao,\n\nYou have won.\nHello Sam! Pay the fee.")
+        self.assertNotIn("Priya", t)
+        self.assertNotIn("Sam", t)
+        self.assertIn("You have won", t)
+        for generic in ("Dear Friend,", "Dear Sir/Madam,", "Dear Beneficiary,", "Hello there,", "Dear Valued Customer,",
+                        "Dear Vern,", "Hello Uncle Vern,", "Dear Mr. Pickett,"):
+            self.assertIn(generic, redact.redact(generic + "\n\nPay the fee."))
+
 
     def test_uncle_never_names_who_the_scam_was_sent_to(self):
         ok = "Dear friend, " + "I am so happy to hear from you about this. " * 8 + "\n\nVern"
@@ -571,11 +580,52 @@ class FlowTests(unittest.TestCase):
         out = self.mail.outbox[0]
         self.assertEqual(out["kind"], "reply")
         self.assertIn("Here's what I'd write back", out["text"])
-        self.assertIn("nothing went to the scammer", out["text"])
-        self.assertEqual(self.app.store.q("SELECT * FROM threads"), [])  # no pen pal, no approval asked
+        self.assertIn("Nothing has gone to the scammer", out["text"])
+        # A company's own domain is too often a real business or a hacked box: no pen pal, no approval asked.
+        self.assertEqual(self.app.store.q("SELECT * FROM threads"), [])
         self.assertIn("practice letter", self.app.store.diary(1)[0]["text"])
         self.assertNotIn(judge, self.app.home_html())
         self.assertIn(f"mailto:{INBOX}", self.app.home_html())
+
+    def test_the_boss_can_paste_a_scam_instead_of_forwarding(self):
+        body = ("barrister.okoro77@gmail.com\n\nDear Friend, I am Barrister James Okoro. My late client left "
+                "US$10.5 million with no next of kin. Kindly reply with your full name and phone number so we can "
+                "process the transfer to you. Reply urgently to this email for the details.")
+        mid, _ = self.mail.deliver(OWNER, "inheritance scam from WhatsApp", body)
+        self.assertEqual(self.eng.handle(mid), "intake")
+        t = self.app.store.q("SELECT * FROM threads")[0]
+        self.assertEqual((t["status"], t["scammer_addr"]), ("pending_approval", "barrister.okoro77@gmail.com"))
+        self.assertNotIn("barrister.okoro77", t["scam_text"])
+        # A note with no scam in it still gets the how-to, which now mentions pasting.
+        mid2, _ = self.mail.deliver(OWNER, "hi", "hey uncle, how are you doing today?")
+        self.eng.handle(mid2)
+        self.assertIn("paste it into a new email", self.mail.outbox[-1]["text"])
+
+    def test_a_friends_forward_becomes_a_real_pen_pal_on_the_bosss_yes(self):
+        friend = "friend@college.example"
+        fwd = GMAIL_FORWARD.replace("claims.desk@barrister-office.example", "barrister.okoro77@gmail.com")
+        mid, _ = self.mail.deliver(friend, "Fwd: URGENT inheritance", "Dear Priya,\n\n" + fwd)
+        self.assertEqual(self.eng.handle(mid), "visitor")
+        ask = next(o for o in self.mail.outbox if o.get("to") == OWNER)
+        practice = next(o for o in self.mail.outbox if o["kind"] == "reply")
+        self.assertIn("asked my boss", practice["text"])
+        self.assertEqual((ask["kind"], ask["to"]), ("send", OWNER))
+        self.assertIn("I'd like to write to: barrister.okoro77@gmail.com", ask["text"])
+        self.assertIn(friend, ask["text"])  # the boss sees who sent it; the page never does
+        t = self.app.store.q("SELECT * FROM threads")[0]
+        self.assertEqual(t["status"], "pending_approval")
+        self.assertNotIn(friend, self.app.home_html())
+        # Nothing reaches the scammer until the boss says yes in that thread.
+        self.assertFalse([o for o in self.mail.outbox if o.get("to") == "barrister.okoro77@gmail.com"])
+        yes, _ = self.mail.deliver(OWNER, "Re: A friend sent me a scam", "yes", thread_id=ask["thread_id"])
+        self.assertEqual(self.eng.handle(yes), "owner_command")
+        sent = [o for o in self.mail.outbox if o.get("to") == "barrister.okoro77@gmail.com"]
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(self.app.store.thread(t["id"])["status"], "active")
+        # The same scammer forwarded again by someone else isn't asked about twice.
+        again, _ = self.mail.deliver("other@college.example", "Fwd: URGENT inheritance", fwd)
+        self.eng.handle(again)
+        self.assertEqual(len(self.app.store.q("SELECT * FROM threads")), 1)
 
     def test_visitor_limits_and_non_scams(self):
         judge = "judge@fly.example"

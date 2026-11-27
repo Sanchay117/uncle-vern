@@ -200,9 +200,11 @@ class Engine:
         exclude = set(self.cfg.owner_emails) | {self.cfg.inbox}
         scam = intake.extract_scam(
             msg, lambda att: self.mail.get_attachment(self.cfg.inbox, msg["message_id"], att), exclude)
+        scam = scam or intake.pasted(msg, exclude)
         if scam is None:
             self._tell_owner(msg, "I couldn't find a forwarded email in that one. Open the scam itself, press plain "
-                                  "Forward (not \"as attachment\") and send it to me.\n\nVern")
+                                  "Forward (not \"as attachment\") and send it to me. Or paste it into a new email: "
+                                  "their email address alone on the first line, the scam below.\n\nVern")
             self.store.note("Got a note from the boss with no scam inside, so I asked for the real thing.")
             return None
         a = self.jev.ask(intake_state(scam["subject"], scam["body"]), intake_questions())
@@ -458,16 +460,40 @@ class Engine:
             return None
         letter, _ = persona.write_letter(self.llm, persona.opening_messages(
             scam["subject"], scam["body"], pen_pals=self._pen_pals()))
+        to = self._pick_address(scam)
+        nominated = self._nominate(scam, to, kind, p, letter, sender)
+        later = ("I've asked my boss whether I should write to them for real. If he says yes, the conversation "
+                 "goes up on my page with names, emails and numbers blacked out. ") if nominated else ""
         self._answer(msg["message_id"], sender, subject, (
             f"Thanks for sending this one over! {self.jev.name} says it's {pct(p)} likely {kind_a(kind)} scam.\n\n"
             "Here's what I'd write back to them:\n\n"
             f"------------------------------\n{letter}\n------------------------------\n\n"
-            "That was practice: nothing went to the scammer. I only write to scammers for real when my boss "
-            "forwards one and says yes. You can read along with my real pen pals here:\n"
+            f"Nothing has gone to the scammer. {later}You can read along with my real pen pals here:\n"
             f"{self.cfg.public_url}\n\nVern"))
         self.store.note(f"Someone forwarded me {kind_a(kind)} scam ({pct(p)}) to see what I'd say. I mailed them "
-                        "my practice letter. Nothing went to the scammer.")
-        return None
+                        "my practice letter. Nothing went to the scammer"
+                        + (" yet: I asked the boss if I should write for real." if nominated else "."), nominated)
+        return nominated
+
+    def _nominate(self, scam, to, kind, p, letter, sender):
+        """A forward from someone else can become a real pen pal, but only on the boss's yes, and only when the
+        address is on a free mail service: a company's own domain is too often a real business or a hacked box."""
+        if not to or not intake.webmail(to) or not self.cfg.owner_emails:
+            return None
+        if self.store.one("SELECT id FROM threads WHERE scammer_addr=?", (to,)):
+            return None  # already writing to them, already asked, or they bounced
+        if len(self.store.active_threads()) >= self.cfg.max_active_threads:
+            return None
+        tid = self.store.new_thread(
+            status="pending_approval", scammer_addr=to, scammer_name=scam.get("from_name", ""),
+            scam_subject=scam["subject"], scam_text=scam["body"][:20000], scam_type=kind, scam_prob=p, draft=letter)
+        res = self.mail.send(self.cfg.inbox, self.cfg.owner_emails[0], f"A friend sent me a scam: {scam['subject']}"[:150], (
+            f"Somebody ({sender}) forwarded me {kind_a(kind)} scam. {self.jev.name} puts it at {pct(p)}.\n\n"
+            f"I'd like to write to: {to}\n\n"
+            f"Here's my letter:\n\n{letter}\n\n"
+            "Reply \"yes\" and I'll send it. Reply \"no\" and I'll leave them be.\n\nVern")) or {}
+        self.store.update_thread(tid, owner_thread_id=res.get("thread_id"), owner_message_id=res.get("message_id"))
+        return tid
 
     # ------------------------------------------------------------ someone writes to Uncle first
     def _stranger(self, msg, sender):
