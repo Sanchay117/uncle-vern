@@ -179,7 +179,12 @@ class App:
                         card=self.card_url("home"), families=self.families(),
                         memory_name=self.memory.name if self.memory.available() else None,
                         voice_name=self.voice.name if self.voice.available() else None,
-                        web_name=self.web.name if self.web.available() else None)
+                        web_name=self.web.name if self.web.available() else None,
+                        capped_until=self._capped())
+
+    def _capped(self):
+        until = self.engine.mail_blocked_until()
+        return until if until > time.time() else None
 
     def kin(self, t):
         """The other conversations with the same script, either way round: [(row, score)], public ones only,

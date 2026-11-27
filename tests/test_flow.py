@@ -959,6 +959,72 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(self.eng.rounds()["verdicts"], 0)
         self.assertNotIn('"at"', self.app.store.thread(t["id"])["web"])
 
+    LIMIT = ('{"name":"RateLimitError","code":"rate_limit_exceeded","message":"New account recipient limit '
+             'exceeded: this organization may email at most 10 distinct recipients in its first 24 hours (25 in its '
+             'first week). The limit rises to 25 at 2030-01-01T07:32:39.031Z and lifts at 2030-01-07T07:32:39.031Z."}')
+
+    def test_the_mail_limit_holds_a_letter_and_sends_it_later(self):
+        from uncle import engine, net
+        real = self.mail.send
+
+        def capped(inbox, to, subject, text):
+            if to != OWNER:
+                raise net.HttpError(429, self.LIMIT, "https://agentmail.example/send")
+            return real(inbox, to, subject, text)
+        self.mail.send = capped
+        mid, owner_tid = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.eng.handle(mid)
+        y, _ = self.mail.deliver(OWNER, "Re: Fwd", "yes", thread_id=owner_tid)
+        self.assertEqual(self.eng.handle(y), "owner_command")
+        t = self.app.store.q("SELECT * FROM threads")[0]
+        self.assertEqual(t["status"], "pending_approval")
+        self.assertEqual(time.strftime("%Y-%m-%d %H:%M", time.gmtime(t["send_after"])), "2030-01-01 07:32")
+        told = self.mail.outbox[-1]["text"]
+        self.assertIn("So this letter waits", told)
+        self.assertIn("after 07:32 UTC on Jan 1", told)
+        self.assertNotIn(t["id"], [p["id"] for p in self.app.store.public_threads()])
+        # Email visitors are told, and pointed at the try box.
+        self.assertIn("If he doesn't answer your email", self.app.home_html())
+        # A second yes doesn't send twice.
+        y2, _ = self.mail.deliver(OWNER, "Re: Fwd", "yes!", thread_id=owner_tid)
+        self.eng.handle(y2)
+        self.assertIn("Already on it", self.mail.outbox[-1]["text"])
+        # Rounds before the limit lifts send nothing; after, the letter goes out and the boss hears.
+        self.assertEqual(self.eng.send_waiting(), 0)
+        self.assertEqual(self.eng.send_waiting(t["send_after"] + 1), 0)  # still capped: waits for the next date
+        later = self.app.store.thread(t["id"])["send_after"]
+        self.assertEqual(time.strftime("%Y-%m-%d", time.gmtime(later)), "2030-01-07")
+        self.mail.send = real
+        self.assertEqual(self.eng.send_waiting(later + 1), 1)
+        out = [o for o in self.mail.outbox if o["kind"] == "send" and o["to"] == "claims.desk@barrister-office.example"]
+        self.assertEqual(len(out), 1)
+        t = self.app.store.thread(t["id"])
+        self.assertEqual((t["status"], t["send_after"]), ("active", None))
+        self.assertIn("just went out", self.mail.outbox[-1]["text"])
+        self.assertEqual(self.eng.send_waiting(time.time() + 9e9), 0)
+        self.assertIsNone(engine.mail_limit(net.HttpError(429, "slow down", "u")))
+        self.assertIsNone(engine.mail_limit(ValueError("x")))
+
+    def test_a_visitor_reply_waits_for_the_mail_limit(self):
+        from uncle import net
+        real = self.mail.reply
+
+        def capped(inbox, message_id, text):
+            raise net.HttpError(429, self.LIMIT, "https://agentmail.example/reply")
+        self.mail.reply = capped
+        mid, _ = self.mail.deliver("judge@fly.example", "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.assertEqual(self.eng.handle(mid), "waiting")
+        self.assertEqual(self.app.store.known_message(mid)["status"], "waiting")
+        self.mail.reply = real
+        self.assertEqual(self.eng.catch_up(), 0)  # not before the limit lifts
+        self.app.store.put("mail_blocked_until", time.time() - 1)
+        self.assertEqual(self.eng.catch_up(), 1)
+        self.assertIn("Yes, it's a scam", self.mail.outbox[-1]["text"])
+        # A message cut off mid-way (a restart) is picked up again after a while, not left forever.
+        self.app.store.run("UPDATE messages SET status='processing', created_at=? WHERE message_id=?",
+                           (time.time() - 3600, mid))
+        self.assertTrue(self.app.store.claim_message(mid, None, "judge@fly.example"))
+
     def test_try_box_shows_the_red_flags(self):
         j = self.eng.try_uncle(GMAIL_FORWARD, "1.2.3.4")
         self.assertIn("asks for a fee before you get paid", j["flags"])

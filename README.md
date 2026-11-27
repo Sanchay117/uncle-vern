@@ -9,7 +9,7 @@ Americans reported losing $12.5 billion to fraud in 2024, up 25% in a year, and 
 So I built Uncle Vern. He's 78, retired from fixing school buses, and very keen to help the nice man with the inheritance. He's ready to go ahead, but Doug the ferret has hidden the checkbook, and could they spell that bank name one more time?
 
 1. Forward a scam from your inbox to Uncle's.
-2. Claude checks it's a scam and finds the address the scammer wants a reply at. Uncle emails you his first letter, and you reply "yes".
+2. Claude checks it's a scam, names the red flags in plain words, and finds the address the scammer wants a reply at. Uncle emails you his first letter, and you reply "yes".
 3. Uncle writes to the scammer, then sleeps. When they write back, he wakes and answers.
 
 **Safety:** Uncle only writes to scams his owner forwards, and the owner says yes to the first letter. Every letter passes a checker that stops links, email addresses, numbers and real names going out. He never sends money, and he stops the minute anyone asks. On the public page, scammers' names, addresses and numbers are blacked out.
@@ -21,7 +21,9 @@ So I built Uncle Vern. He's 78, retired from fixing school buses, and very keen 
 3. Under his letter, **Now you be the scammer**: write back as them, push him to pay, tap **Send as the scammer**, and see how he wriggles out of it.
 4. Scroll to **The mailbag** to read the real scammers he's writing to.
 
-Or forward a real scam from your own inbox to `uncle.vern@agentmail.to`. He emails you the letter he'd send, usually within a minute.
+Or forward a real scam from your own inbox to `uncle.vern@agentmail.to`. Within a minute or two he emails you back: why it's a scam (the red flags, and whether the same letter is already posted on scam-report sites), and the letter he'd send. Reply to that email as the scammer and he keeps going, for up to five rounds. Nothing goes to the real scammer.
+
+His mailbox is new, and until Dec 4 AgentMail limits how many different people a new account can write to. If he doesn't answer your email, the try box does the same thing.
 
 ## Why a Sprite
 
@@ -30,15 +32,19 @@ Scammers answer hours or days apart. Uncle has to be there when they do, and cos
 - **Sleep and wake.** Uncle is a Sprite service. AgentMail's webhook wakes the Sprite when mail arrives. The Sprite then holds a task open through its local API while he writes, so it doesn't pause halfway through a letter.
 - **Disk.** Every conversation lives in SQLite on the Sprite's own disk, so it survives every sleep.
 - **Connector gateway.** No API key is stored on the box. AgentMail (his inbox) and Anthropic (Claude, which makes every decision and writes every letter) go through Fly's gateway. A scammer who talks Uncle into anything finds nothing to steal.
-- **Pinecone, optional.** With a Pinecone connector, Pinecone's reranker gives Uncle a memory for scam scripts. When a new scam is the same letter as an old one from a different address, he says so. Without it, nothing else changes.
+- **Optional connectors, each doing one job.** Without one, only that job is skipped.
+  - **Pinecone** embeddings give Uncle a memory for scam scripts. When a new scam is the same letter as an old one from a different address, he says so.
+  - **Apify** (Google Search Scraper) searches the web for one sentence of each scam, never one with a name, address or number in it, and links the pages where the same letter was already posted.
+  - **Deepgram** (Aura-2) reads his letters aloud on the page.
 
 ## Proof
 
 As of Nov 27, 2026, all real and nothing planted:
 
-- First letters went out to six live scammers. They came from the owner's own spam, sifted from about 1,100 emails: two Niger Delta "compensation" offers, a loan advisor, a lookalike steel company, a romance opener and an "is this the right email?" probe.
-- Three more scam addresses had already been shut down when Uncle wrote, and their letters bounced.
+- First letters went out to seven live scammers. They came from the owner's own spam, sifted from about 1,100 emails: two Niger Delta "compensation" offers, a loan advisor, a lookalike steel company, a romance opener, an "is this the right email?" probe and an inheritance offer.
+- Three more scam addresses had already been shut down when Uncle wrote, and their letters bounced. Five more letters are approved and waiting on AgentMail's new-account limit.
 - He declined one: a job offer from a real company's domain.
+- Pinecone matched one script sent from three different addresses. Apify found that same letter posted on three other sites this month.
 - No scammer has written back yet. When one does, the time-wasted counter on the home page starts.
 
 ## How it works
@@ -59,7 +65,9 @@ scam forwarded ──> AgentMail inbox ──webhook──> Sprite wakes
 - `uncle/persona.py`: Uncle's voice and the letter checker
 - `uncle/claude.py`: decisions and letters through the Anthropic connector
 - `uncle/gateway.py`, `uncle/clients.py`: the Sprites connector gateway, AgentMail
-- `uncle/memory.py`: script memory through Pinecone's reranker
+- `uncle/memory.py`: script memory through Pinecone embeddings
+- `uncle/websearch.py`: the Apify check for copies of a scam on the web
+- `uncle/voice.py`: Deepgram reading his letters aloud
 - `uncle/redact.py`: what the public page blacks out
 - `uncle/awake.py`, `uncle/meter.py`: holding the Sprite awake while working, and counting time awake
 - `uncle/server.py`, `uncle/web.py`: the public page, try box and conversation pages

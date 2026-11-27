@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS boots(
   disk_gb REAL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS tries(id INTEGER PRIMARY KEY AUTOINCREMENT, ip_hash TEXT, at REAL);
+CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS web_checks(id INTEGER PRIMARY KEY AUTOINCREMENT, phrase TEXT, at REAL, result TEXT);
 CREATE TABLE IF NOT EXISTS practice(  -- someone who forwarded a scam, now playing the scammer by email
   am_thread_id TEXT PRIMARY KEY,
@@ -85,6 +86,9 @@ CREATE INDEX IF NOT EXISTS threads_owner ON threads(owner_thread_id);
 """
 
 
+STALE = 900  # seconds before a message left "processing" counts as cut off
+
+
 class Store:
     def __init__(self, path):
         d = os.path.dirname(path)
@@ -98,7 +102,8 @@ class Store:
             self.db.executescript(SCHEMA)
             # Columns added after the first deploy: a disk made by an older Uncle gets them here.
             have = {r["name"] for r in self.db.execute("PRAGMA table_info(threads)").fetchall()}
-            for col, kind in (("kin", "TEXT"), ("vec", "TEXT"), ("flags", "TEXT"), ("web", "TEXT")):
+            for col, kind in (("kin", "TEXT"), ("vec", "TEXT"), ("flags", "TEXT"), ("web", "TEXT"),
+                              ("send_after", "REAL")):
                 if col not in have:
                     self.db.execute(f"ALTER TABLE threads ADD COLUMN {col} {kind}")
             if "vec" not in have:
@@ -119,12 +124,23 @@ class Store:
             cur = self.db.execute(sql, args)
             return cur.lastrowid
 
+    # -- small facts Uncle keeps between wake-ups
+    def get(self, key, default=None):
+        r = self.one("SELECT value FROM state WHERE key=?", (key,))
+        return r["value"] if r else default
+
+    def put(self, key, value):
+        self.run("INSERT OR REPLACE INTO state(key, value) VALUES(?,?)", (key, str(value)))
+
     # -- messages (dedupe and audit)
     def claim_message(self, message_id, am_thread_id, sender):
         """Returns False if this message was already handled or is being handled."""
         with self.lock:
-            row = self.db.execute("SELECT status FROM messages WHERE message_id=?", (message_id,)).fetchone()
-            if row and row["status"] in ("done", "processing"):
+            row = self.db.execute("SELECT status, created_at FROM messages WHERE message_id=?",
+                                  (message_id,)).fetchone()
+            # A message stuck "processing" for a quarter hour was cut off (a restart, say): try it again.
+            if row and (row["status"] == "done" or (row["status"] == "processing"
+                                                     and (row["created_at"] or 0) > time.time() - STALE)):
                 return False
             self.db.execute(
                 "INSERT OR REPLACE INTO messages(message_id, am_thread_id, sender, kind, status, created_at)"

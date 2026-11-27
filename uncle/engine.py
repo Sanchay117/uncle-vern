@@ -3,10 +3,12 @@
 Every decision is a Jev question with a number attached, and every action is
 written to Uncle's diary in plain words, so anyone can see why he did it.
 """
-import email.utils
 import concurrent.futures
+import datetime
+import email.utils
 import hashlib
 import json
+import re
 import threading
 import time
 import traceback
@@ -115,6 +117,38 @@ def is_bounce(sender, subject):
     subject = (subject or "").lower()
     return local in ("mailer-daemon", "postmaster") or subject.startswith(
         ("delivery status notification", "undeliverable", "undelivered mail", "mail delivery failed"))
+
+
+LIMIT_AT = re.compile(r"\bat (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)")
+
+
+def mail_limit(exc, now=None):
+    """AgentMail lets a brand-new account write to only so many different people (10 on day one, 25 in week
+    one). When that stops a letter, the time it's worth trying again; None for any other error."""
+    if not isinstance(exc, net.HttpError) or exc.status != 429 or "recipient limit" not in (exc.body or "").lower():
+        return None
+    now = now or time.time()
+    times = []
+    for stamp in LIMIT_AT.findall(exc.body):
+        try:
+            times.append(datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp())
+        except ValueError:
+            pass
+    later = [t for t in times if t > now]
+    return min(later) if later else now + 3600
+
+
+def when_text(ts, now=None):
+    """'after 07:32 UTC on Nov 28, about 9 hours from now'"""
+    h = max(0.0, (ts - (now or time.time())) / 3600)
+    if h < 0.75:
+        about = "within the hour"
+    elif h < 36:
+        about = f"about {round(h)} hour{'' if round(h) == 1 else 's'} from now"
+    else:
+        about = f"about {round(h / 24)} days from now"
+    g = time.gmtime(ts)
+    return f"after {time.strftime('%H:%M', g)} UTC on {time.strftime('%b', g)} {g.tm_mday}, {about}"
 
 
 def _err(exc):
@@ -275,6 +309,13 @@ class Engine:
                 self.store.finish_message(message_id, kind, thread_ref=ref)
                 return kind
             except Exception as exc:  # noqa: BLE001
+                when = mail_limit(exc)
+                if when:
+                    self.store.put("mail_blocked_until", when)
+                    self.store.finish_message(message_id, "waiting", status="waiting", detail=f"mail limit {when}")
+                    self.store.note(f"My mailbox is too new to write to anyone else yet, so this one waits until "
+                                    f"{when_text(when)}.", kind="error", public=False)
+                    return "waiting"
                 self.store.finish_message(message_id, "error", status="error",
                                           detail=traceback.format_exc()[-2000:])
                 self.store.note(f"Something went wrong handling a letter: {exc}", kind="error", public=False)
@@ -293,7 +334,9 @@ class Engine:
             if not mid or "sent" in labels:
                 continue
             known = self.store.known_message(mid)
-            if known and known["status"] in ("done", "processing"):
+            if known and (known["status"] == "done"
+                          or (known["status"] == "processing" and (known["created_at"] or 0) > time.time() - 900)
+                          or (known["status"] == "waiting" and time.time() < self.mail_blocked_until())):
                 continue
             if self.handle(mid) not in ("self", "duplicate"):
                 n += 1
@@ -303,6 +346,10 @@ class Engine:
         """Uncle's mailbox check, whenever something wakes him: pick up missed mail, then follow up once on
         any first letter that has gone a day without an answer."""
         out = {"caught_up": self.catch_up(), "nudged": self.nudge_due()}
+        try:
+            out["sent_waiting"] = self.send_waiting()
+        except Exception as exc:  # noqa: BLE001
+            self.store.note(f"Couldn't send a waiting letter ({_err(exc)}).", kind="error", public=False)
         if self.memory:
             try:
                 out["remembered"] = self.memory.backfill()
@@ -314,6 +361,60 @@ class Engine:
         except Exception as exc:  # noqa: BLE001
             self.store.note(f"Couldn't fill in red flags or web searches ({_err(exc)}).", kind="error", public=False)
         return out
+
+    def mail_blocked_until(self):
+        try:
+            return float(self.store.get("mail_blocked_until") or 0)
+        except ValueError:
+            return 0.0
+
+    def send_waiting(self, now=None):
+        """First letters the boss said yes to while the mail limit was on: send them once it lifts."""
+        now = now or time.time()
+        sent = 0
+        with self.lock:
+            for t in self.store.q("SELECT * FROM threads WHERE status='pending_approval' AND send_after IS NOT NULL "
+                                  "AND send_after<=? ORDER BY id", (now,)):
+                if self.store.uncle_letters_since(now - DAY) >= self.cfg.max_letters_day:
+                    break
+                try:
+                    self._send_first(t)
+                except net.HttpError as exc:
+                    when = mail_limit(exc, now)
+                    if not when:
+                        raise
+                    self.store.put("mail_blocked_until", when)
+                    self.store.run("UPDATE threads SET send_after=? WHERE status='pending_approval' "
+                                   "AND send_after IS NOT NULL AND send_after<?", (when, when))
+                    break
+                sent += 1
+                if self.cfg.owner_emails and t["owner_message_id"]:
+                    otid = self._tell_owner(
+                        {"message_id": t["owner_message_id"], "thread_id": t["owner_thread_id"],
+                         "from": self.cfg.owner_emails[0], "subject": "Sent"},
+                        f"The letter to {t['scammer_addr']} that was waiting on the mail limit just went out. You "
+                        f"can watch here: {self.cfg.public_url}/t/{t['id']}\n\nVern")
+                    if otid and otid != t["owner_thread_id"]:
+                        self.store.update_thread(t["id"], owner_thread_id=otid)
+        return sent
+
+    def _send_first(self, thread):
+        """Uncle's first letter to a scammer the boss said yes to."""
+        tid = thread["id"]
+        if thread["origin_message_id"]:
+            # The scammer wrote to Uncle first: answer in their own thread.
+            res = self._answer(thread["origin_message_id"], thread["scammer_addr"], thread["scam_subject"],
+                               thread["draft"])
+        else:
+            res = self.mail.send(self.cfg.inbox, thread["scammer_addr"],
+                                 "Re: " + (thread["scam_subject"] or "your letter")[:150], thread["draft"])
+        now = time.time()
+        self.store.update_thread(tid, status="active", approved_at=now, send_after=None,
+                                 am_thread_id=res.get("thread_id") or thread["am_thread_id"])
+        self.store.add_letter(tid, "uncle", res.get("message_id"), thread["draft"], redact.private(thread["draft"]),
+                              sent_at=now)
+        self.store.note("The boss said yes. First letter's in the mail. Now I wait.", tid)
+        return res
 
     def nudge_due(self, now=None):
         with self.lock:
@@ -453,28 +554,34 @@ class Engine:
         cmd, conf = picked(a, "command", "other")
         tid = thread["id"]
         if cmd == "approve" and conf >= 0.6 and thread["status"] == "pending_approval":
+            if thread.get("send_after"):
+                self._tell_owner(msg, f"Already on it: that letter goes out by itself {when_text(thread['send_after'])}."
+                                      "\n\nVern")
+                return tid
             if self.store.uncle_letters_since(time.time() - DAY) >= self.cfg.max_letters_day:
                 self._tell_owner(msg, "I've written all the letters I'm allowed today. I'll send it tomorrow.\n\nVern")
                 return tid
-            if thread["origin_message_id"]:
-                # The scammer wrote to Uncle first: answer in their own thread.
-                res = self._answer(thread["origin_message_id"], thread["scammer_addr"], thread["scam_subject"],
-                                   thread["draft"])
-            else:
-                res = self.mail.send(self.cfg.inbox, thread["scammer_addr"],
-                                     "Re: " + (thread["scam_subject"] or "your letter")[:150], thread["draft"])
-            now = time.time()
-            self.store.update_thread(tid, status="active", approved_at=now,
-                                     am_thread_id=res.get("thread_id") or thread["am_thread_id"])
-            self.store.add_letter(tid, "uncle", res.get("message_id"), thread["draft"], redact.private(thread["draft"]),
-                                  sent_at=now)
-            self.store.note("The boss said yes. First letter's in the mail. Now I wait.", tid)
+            try:
+                self._send_first(thread)
+            except net.HttpError as exc:
+                when = mail_limit(exc)
+                if not when:
+                    raise
+                self.store.put("mail_blocked_until", when)
+                self.store.update_thread(tid, send_after=when)
+                self.store.note("The boss said yes, but my mailbox is too new to write to anyone else just yet. "
+                                "The letter goes out as soon as the post office lets me.", tid)
+                self._tell_owner(msg, (
+                    "Got your yes. But my mailbox is brand new, and AgentMail only lets a new one write to a few "
+                    "different people at first (10 on the first day, 25 in the first week). So this letter waits, "
+                    f"and I'll send it myself {when_text(when)}. I'll tell you when it's gone.\n\nVern"))
+                return tid
             otid = self._tell_owner(msg, f"Sent. I'll tell you when they bite. You can watch here: "
                                          f"{self.cfg.public_url}/t/{tid}\n\nVern")
             if otid and otid != thread["owner_thread_id"]:
                 self.store.update_thread(tid, owner_thread_id=otid)
         elif cmd == "decline" and thread["status"] == "pending_approval":
-            self.store.update_thread(tid, status="declined", close_reason="owner said no")
+            self.store.update_thread(tid, status="declined", close_reason="owner said no", send_after=None)
             self.store.note("The boss said no to that one, so I tore up my letter.", tid)
             self._tell_owner(msg, "Righto, I won't write to them.\n\nVern")
         elif cmd == "hide":

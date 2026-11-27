@@ -566,14 +566,21 @@ def share_bar(cfg, t, card_url):
             'a.textContent="Link copied";});});});</script>')
 
 
-def by_mail(cfg):
+def by_mail(cfg, capped_until=None):
     if not cfg.inbox:
         return ""
+    if capped_until:
+        g = time.gmtime(capped_until)
+        cap = (f" <b>Heads up:</b> Uncle's mailbox is new, so until {time.strftime('%b', g)} {g.tm_mday} the mail "
+               "service only lets him write to a few new people. If he doesn't answer your email, the try box "
+               "above does the same thing, right here.")
+    else:
+        cap = ""
     return (f'<p class="bymail"><b>Or try him by email.</b> Forward a scam from your own inbox to '
             f'<a href="mailto:{esc(cfg.inbox)}">{esc(cfg.inbox)}</a>. The email wakes him up, and he mails you '
             "back within a minute or two: why it's a scam, and the letter he'd send. Then reply to him as the "
             f"scammer, and he keeps going, for up to {cfg.practice_rounds} rounds. Nothing goes to the real "
-            "scammer unless his boss reads it and says yes.</p>")
+            f"scammer unless his boss reads it and says yes.{cap}</p>")
 
 
 def desk(latest_scam, letters_out=0):
@@ -591,7 +598,7 @@ def desk(latest_scam, letters_out=0):
 
 
 def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, latest_scam=None, wakes=(),
-         card=None, families=(), memory_name=None, voice_name=None, web_name=None):
+         card=None, families=(), memory_name=None, voice_name=None, web_name=None, capped_until=None):
     cards = "".join(thread_card(t, letters_by_thread.get(t["id"], [])) for t in threads) or \
         '<div class="empty">No pen pals yet. Uncle is sitting by the mailbox.</div>'
     diary_html = "".join(
@@ -627,7 +634,7 @@ placeholder="Paste a scam email here.&#10;&#10;Dear Beloved, I am Barrister ... 
 <button class="btn ghost" type="button" id="sample">Use a sample scam</button></p></form>
 <div class="out" id="out"><div class="wait">Uncle's letter will appear here.</div></div>
 </div>
-{by_mail(cfg)}
+{by_mail(cfg, capped_until)}
 
 <h2 id="mailbag">The mailbag <small>scammers' addresses, numbers, links and names are blacked out</small></h2>
 <div class="bag">{cards}</div>
