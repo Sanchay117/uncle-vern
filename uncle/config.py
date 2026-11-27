@@ -39,5 +39,7 @@ class Config:
         self.visitor_per_day = int(e("VISITOR_PER_DAY", "5"))
         # One short "did my letter reach you?" when a first letter gets no answer for this long.
         self.nudge_after_hours = float(e("NUDGE_AFTER_HOURS", "24"))
+        # How alike (0 to 1, Pinecone's reranker) two scams must be to count as the same script.
+        self.memory_same = float(e("MEMORY_SAME", "0.75"))
         for k, v in overrides.items():
             setattr(self, k, v)

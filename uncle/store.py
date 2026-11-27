@@ -87,6 +87,11 @@ class Store:
         self.lock = threading.RLock()
         with self.lock:
             self.db.executescript(SCHEMA)
+            # Columns added after the first deploy: a disk made by an older Uncle gets them here.
+            have = {r["name"] for r in self.db.execute("PRAGMA table_info(threads)").fetchall()}
+            for col, kind in (("kin", "TEXT"),):
+                if col not in have:
+                    self.db.execute(f"ALTER TABLE threads ADD COLUMN {col} {kind}")
 
     # -- generic helpers
     def q(self, sql, args=()):

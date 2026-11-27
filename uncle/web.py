@@ -199,6 +199,10 @@ h2 small{font:13px/1.3 system-ui,sans-serif;color:var(--soft);margin-left:10px;l
 .hear{font:13px/1 system-ui,sans-serif;color:var(--ink);background:none;border:0;padding:10px 2px 2px;cursor:pointer;
 text-decoration:underline;text-underline-offset:3px}
 .hear:hover{color:#000}
+.kin{font:14px/1.5 system-ui,sans-serif;background:#fff8d9;border-left:4px solid var(--ink);padding:10px 14px;
+margin:14px 0 0;max-width:62ch}
+.families{list-style:none;padding:0;margin:0;font:15px/1.6 system-ui,sans-serif}
+.families li{padding:10px 0;border-bottom:1px dashed rgba(0,0,0,.25)}
 
 /* mailbag */
 .bag{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px}
@@ -560,7 +564,7 @@ def desk(latest_scam, letters_out=0):
 
 
 def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, latest_scam=None, wakes=(),
-         card=None):
+         card=None, families=(), memory_name=None):
     cards = "".join(thread_card(t, letters_by_thread.get(t["id"], [])) for t in threads) or \
         '<div class="empty">No pen pals yet. Uncle is sitting by the mailbox.</div>'
     diary_html = "".join(
@@ -568,6 +572,7 @@ def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, lat
         '<li><time></time><span>Nothing yet.</span></li>'
     hook = dur(totals["longest_hook_s"]) if totals["longest_hook_s"] else "-"
     wasted = wasted_seconds(totals)
+    mem = f", {esc(memory_name)} (his memory for scam scripts)" if memory_name else ""
     body = f"""{header(meter)}
 <section class="hero"><div>
 <h1>Uncle Vern answers scam emails. <em>All of them.</em> <em>At length.</em></h1>
@@ -605,6 +610,7 @@ placeholder="Paste a scam email here.&#10;&#10;Dear Beloved, I am Barrister ... 
 
 <h2 id="mailbag">The mailbag <small>scammers' addresses, numbers, links and names are blacked out</small></h2>
 <div class="bag">{cards}</div>
+{families_section(families, memory_name)}
 
 <h2>How it works</h2>
 <div class="steps">
@@ -624,7 +630,7 @@ money, links or real details. And I stop the minute anybody asks. <span style="f
 <ul class="diary">{diary_html}</ul>
 
 {SCENE}
-<footer>Runs on one Fly.io Sprite. Connectors: AgentMail (his inbox), {connectors_line()}.
+<footer>Runs on one Fly.io Sprite. Connectors: AgentMail (his inbox), {connectors_line()}{mem}.
 API keys stored on this machine: <b>{keys_on_box}</b>, so there's nothing for a
 scammer to talk him out of.<br>
 Credit where it's due: Netsafe's Re:scam (New Zealand, 2017) and O2's Daisy (UK, 2024) wasted scammers' time for a
@@ -638,7 +644,40 @@ def original_scam(t):
     return redact.redact(t.get("scam_text") or "", names=[t["scammer_name"]] if t.get("scammer_name") else [])
 
 
-def thread_page(cfg, meter, t, letters, diary, card=None):
+def _titles(rows):
+    links = [f'<a href="/t/{r["id"]}">&ldquo;{esc((redact.subject(r["scam_subject"]) or "a letter")[:60])}&rdquo;</a>'
+             for r in rows]
+    return links[0] if len(links) == 1 else ", ".join(links[:-1]) + " and " + links[-1]
+
+
+def kin_line(kin, memory_name):
+    """'Seen this script before' on a conversation page."""
+    public, hidden = kin or ([], 0)
+    if not public and not hidden:
+        return ""
+    times = f"{hidden} more time{'' if hidden == 1 else 's'}"
+    if public:
+        alike = ", ".join(f"{round(s * 100)}%" for _, s in public)
+        what = (f"this is the same letter as {_titles([r for r, _ in public])} ({alike} alike), sent from "
+                f"{'a different address' if len(public) == 1 else 'different addresses'}.")
+        more = f" Uncle has had it {times} besides, and didn't write back." if hidden else ""
+    else:
+        what, more = f"Uncle has had this same letter {times}, from another address.", ""
+    return (f'<p class="kin"><b>Seen this script before.</b> {esc(memory_name)}\'s reranker says {what}'
+            f'{more} When one mailbox gets shut down, the script just moves to a new one.</p>')
+
+
+def families_section(families, memory_name):
+    if not families:
+        return ""
+    items = "".join(
+        f'<li>{_titles(f["public"])}: one script, {f["n"]} letters, from {f["addresses"]} '
+        f'address{"" if f["addresses"] == 1 else "es"}.</li>' for f in families)
+    return (f'<h2>Same script, new address <small>{esc(memory_name or "his memory")} spots the repeats</small></h2>'
+            f'<ul class="families">{items}</ul>')
+
+
+def thread_page(cfg, meter, t, letters, diary, card=None, kin=None, memory_name="Pinecone"):
     parts = []
     if t.get("scam_text") and not (letters and letters[0]["direction"] == "scammer"):
         stamp = f'<div class="stampmark">{postmark(round((t["scam_prob"] or 0) * 100), "SCAM", dn().upper(), 70)}</div>'
@@ -671,7 +710,7 @@ def thread_page(cfg, meter, t, letters, diary, card=None):
 {dn()} {round((t['scam_prob'] or 0) * 100)}% scam · {esc(status)}</div>
 <h1>{esc(redact.subject(t['scam_subject']) or 'A letter')}</h1>
 <p class="meta">The subject line, as the scammer wrote it.</p>
-{frustration_meter(t['frustration']) if t['first_bite_at'] else ''}{share_bar(cfg, t, card)}</div>
+{frustration_meter(t['frustration']) if t['first_bite_at'] else ''}{kin_line(kin, memory_name)}{share_bar(cfg, t, card)}</div>
 <div class="conv">{''.join(parts)}</div>
 <h2>Uncle's diary for this one</h2><ul class="diary">{diary_html}</ul>
 {SCENE}

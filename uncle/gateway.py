@@ -18,7 +18,18 @@ SERVICES = {
     "jev": (["typesafe", "systemone", "jev"], "https://api.typesafe.ai", "TYPESAFE_API_KEY"),
     "ollama": (["ollama"], "https://ollama.com", "OLLAMA_API_KEY"),
     "anthropic": (["anthropic"], "https://api.anthropic.com", "ANTHROPIC_API_KEY"),
+    "pinecone": (["pinecone"], "https://api.pinecone.io", "PINECONE_API_KEY"),
 }
+
+# Services that take their key in a header of their own rather than "Authorization: Bearer".
+KEY_HEADER = {"pinecone": "Api-Key"}
+
+
+def _auth(name, key):
+    if not key:
+        return {}
+    h = KEY_HEADER.get(name)
+    return {h: key} if h else {"Authorization": f"Bearer {key}"}
 
 KEY_VARS = [v[2] for v in SERVICES.values()]
 
@@ -81,10 +92,9 @@ def resolve(name):
     override = os.environ.get(f"{name.upper()}_BASE")
     key = os.environ.get(key_var)
     if override:
-        hdrs = {"Authorization": f"Bearer {key}"} if key else {}
-        return Endpoint(override, hdrs, via="override")
+        return Endpoint(override, _auth(name, key), via="override")
     if key:
-        return Endpoint(direct, {"Authorization": f"Bearer {key}"}, via="direct")
+        return Endpoint(direct, _auth(name, key), via="direct")
     with _lock:
         if name in _cache:
             return _cache[name]

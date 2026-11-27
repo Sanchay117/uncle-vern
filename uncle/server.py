@@ -6,7 +6,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import awake, card, claude, clients, gateway, meter, redact, web
+from . import awake, card, claude, clients, gateway, memory, meter, redact, web
 from .config import Config
 from .engine import Engine
 from .store import Store
@@ -61,7 +61,9 @@ class App:
         self.jev, self.llm = jev, llm
         web.DECIDER.update(name=jev.name, maker=jev.maker, about=jev.about)
         web.VOICE.update(name=llm.name, maker=llm.maker)
-        self.engine = Engine(self.cfg, self.store, self.mail, self.jev, self.llm)
+        ranker = memory.WordsRanker() if self.cfg.mock else memory.PineconeRanker()
+        self.memory = memory.Memory(self.store, ranker, same=self.cfg.memory_same)
+        self.engine = Engine(self.cfg, self.store, self.mail, self.jev, self.llm, memory=self.memory)
         self.meter = meter.Meter(self.store)
         self.jobs = queue.Queue()
         self.cards = {}  # key -> (version, png)
@@ -168,14 +170,45 @@ class App:
                         self.store.diary(25), gateway.keys_on_box(), latest_scam=latest,
                         wakes=self.store.q("SELECT started_at, last_seen FROM boots WHERE last_seen>=?",
                                            (time.time() - 86400,)),
-                        card=self.card_url("home"))
+                        card=self.card_url("home"), families=self.families(),
+                        memory_name=self.memory.name if self.memory.available() else None)
+
+    def kin(self, t):
+        """The other conversations with the same script, either way round: [(row, score)], public ones only,
+        plus how many more Uncle saw but never wrote to."""
+        scores = dict(memory.kin_of(t))
+        for o in self.store.q("SELECT id, kin FROM threads WHERE kin LIKE ?", (f"%[{t['id']},%",)):
+            for k, s in memory.kin_of(o):
+                if k == t["id"]:
+                    scores[o["id"]] = max(scores.get(o["id"], 0), s)
+        public, hidden = [], 0
+        for k, s in sorted(scores.items(), key=lambda p: -p[1]):
+            row = self._public_thread(k)
+            if row:
+                public.append((row, s))
+            else:
+                hidden += 1
+        return public, hidden
+
+    def families(self):
+        """Scripts Uncle has had more than once: [{'public': [rows], 'n': size, 'addresses': distinct addresses}]."""
+        rows = self.store.q("SELECT id, kin, scammer_addr FROM threads WHERE scam_text IS NOT NULL AND scam_text != ''")
+        by_id = {r["id"]: r for r in rows}
+        out = []
+        for group in memory.families(rows):
+            public = [p for p in (self._public_thread(i) for i in group) if p]
+            if public:
+                out.append({"public": public, "n": len(group),
+                            "addresses": len({by_id[i]["scammer_addr"] for i in group if by_id[i]["scammer_addr"]})})
+        return out
 
     def thread_html(self, tid):
         t = self._public_thread(tid)
         if not t:
             return None
         return web.thread_page(self.cfg, self.meter_stats(), t, self._letters(t),
-                               self.store.diary(50, tid), card=self.card_url(tid))
+                               self.store.diary(50, tid), card=self.card_url(tid), kin=self.kin(t),
+                               memory_name=self.memory.name)
 
     def stats(self):
         return {"totals": self.store.totals(), "meter": self.meter_stats(), "keys_on_box": gateway.keys_on_box(),

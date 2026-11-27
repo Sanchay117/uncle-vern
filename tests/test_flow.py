@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from uncle import clients, gateway, intake, meter, persona, redact, web  # noqa: E402
+from uncle import clients, gateway, intake, memory, meter, persona, redact, web  # noqa: E402
 from uncle.config import Config  # noqa: E402
 from uncle.server import App  # noqa: E402
 
@@ -193,6 +193,61 @@ class RedactTests(unittest.TestCase):
             self.assertIn("Training program", redact.subject("NOTICE 1 - Example Institute | Training program"))
         finally:
             del os.environ["REDACT_WORDS"]
+
+
+class MemoryTests(unittest.TestCase):
+    def test_families_group_threads_either_way_round(self):
+        rows = [{"id": 1, "kin": None}, {"id": 2, "kin": "[[1, 0.9]]"}, {"id": 3, "kin": "[[2, 0.8]]"},
+                {"id": 4, "kin": "[]"}, {"id": 5, "kin": "not json"}]
+        self.assertEqual(memory.families(rows), [[1, 2, 3]])
+
+    def test_pinecone_rerank_request(self):
+        seen = {}
+
+        def fake(method, url, body=None, headers=None, timeout=60, retries=2):
+            seen.update(method=method, url=url, body=body, headers=headers)
+            return {"data": [{"index": 1, "score": 0.91}, {"index": 0, "score": 0.2}], "usage": {"rerank_units": 1}}
+        old, os.environ["PINECONE_API_KEY"] = clients.net.request, "pc-test"
+        clients.net.request = fake
+        try:
+            r = memory.PineconeRanker()
+            self.assertEqual(r.rank("Dear friend", ["a", "b"], top_n=2), [(1, 0.91), (0, 0.2)])
+        finally:
+            clients.net.request = old
+            del os.environ["PINECONE_API_KEY"]
+        self.assertEqual((seen["method"], seen["url"]), ("POST", "https://api.pinecone.io/rerank"))
+        self.assertEqual(seen["headers"]["Api-Key"], "pc-test")
+        self.assertIn("X-Pinecone-API-Version", seen["headers"])
+        self.assertEqual(seen["body"]["model"], "bge-reranker-v2-m3")
+        self.assertEqual(seen["body"]["documents"][1], {"id": "1", "text": "b"})
+
+    def test_no_connector_means_no_memory_and_no_fuss(self):
+        old = memory.gateway.resolve
+
+        def missing(name):
+            raise RuntimeError("No Sprites connector found for pinecone")
+        memory.gateway.resolve = missing
+        try:
+            r = memory.PineconeRanker()
+            self.assertFalse(r.available())
+            self.assertEqual(r.rank("q", ["d"], 1), [])
+        finally:
+            memory.gateway.resolve = old
+
+    def test_an_old_disk_gets_the_new_column(self):
+        import sqlite3
+        from uncle.store import SCHEMA, Store
+        self.assertNotRegex(SCHEMA, r"\bkin\b")  # the live disk was made before memory, without the column
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "old.db")
+            db = sqlite3.connect(path)
+            db.executescript(SCHEMA)
+            db.execute("INSERT INTO threads(scam_text) VALUES('old one')")
+            db.commit()
+            db.close()
+            s = Store(path)
+            self.assertIn("kin", {r["name"] for r in s.q("PRAGMA table_info(threads)")})
+            self.assertEqual(s.q("SELECT scam_text, kin FROM threads"), [{"scam_text": "old one", "kin": None}])
 
 
 class AgentMailConnectorTests(unittest.TestCase):
@@ -624,7 +679,8 @@ class FlowTests(unittest.TestCase):
         self.assertIn("make sure my letter got there", self.app.store.diary(1)[0]["text"])
         self.assertEqual(self.eng.nudge_due(later + 48 * 3600), 0)  # only ever once
         # Rounds also pick up anything the webhook missed.
-        self.assertEqual(self.eng.rounds(), {"caught_up": 0, "nudged": 0})
+        r = self.eng.rounds()
+        self.assertEqual((r["caught_up"], r["nudged"]), (0, 0))
         prompt = self.app.llm.calls[-1][-1]["content"]
         self.assertIn("heard nothing back", prompt)
         # A visit or the hourly ping asks for rounds, at most once in a while.
@@ -642,6 +698,37 @@ class FlowTests(unittest.TestCase):
         msgs = persona.opening_messages("URGENT", "Kindly send your details.")
         self.assertIn("70 to 130 words", msgs[-1]["content"])
         self.assertIn("never a dollar amount", msgs[-1]["content"])
+
+    def test_uncle_remembers_a_script_from_a_new_address(self):
+        first, _ = self.forward_and_approve()
+        again = GMAIL_FORWARD.replace("claims.desk@barrister-office.example", "new.desk77@gmail.com")
+        mid, owner_tid = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", again)
+        self.eng.handle(mid)
+        ask = self.mail.outbox[-1]
+        self.assertRegex(ask["text"], rf"remembers this script: it's \d+% like #{first['id']} ")
+        self.assertIn("which I'm writing to at claims.desk@barrister-office.example", ask["text"])
+        second = self.app.store.q("SELECT * FROM threads ORDER BY id DESC")[0]
+        (kin_id, kin_score), = memory.kin_of(second)
+        self.assertEqual(kin_id, first["id"])
+        self.assertGreaterEqual(kin_score, self.app.cfg.memory_same)
+        self.assertIn("I've had this letter before", self.app.store.diary(5, second["id"])[0]["text"])
+        # Only conversations on the page are linked; until then it's a count. Once both are, each links the other.
+        page = self.app.thread_html(first["id"])
+        self.assertIn("Uncle has had this same letter 1 more time, from another address.", page)
+        self.assertNotIn(f'href="/t/{second["id"]}"', page)
+        yes, _ = self.mail.deliver(OWNER, "Re: Fwd", "yes", thread_id=owner_tid)
+        self.eng.handle(yes)
+        self.assertIn(f'href="/t/{second["id"]}"', self.app.thread_html(first["id"]))
+        self.assertIn("Seen this script before", self.app.thread_html(second["id"]))
+        home = self.app.home_html()
+        self.assertIn("Same script, new address", home)
+        self.assertIn("one script, 2 letters, from 2 addresses", home)
+
+    def test_rounds_fill_in_memory_for_older_threads(self):
+        first, _ = self.forward_and_approve()
+        self.app.store.update_thread(first["id"], kin=None)
+        self.assertEqual(self.eng.rounds()["remembered"], 1)
+        self.assertEqual(self.app.store.thread(first["id"])["kin"], "[]")
 
     def test_the_same_scammer_twice_gets_one_letter(self):
         t, _ = self.forward_and_approve()

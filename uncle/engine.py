@@ -115,13 +115,45 @@ def kind_a(kind):
 
 
 class Engine:
-    def __init__(self, cfg, store, mail, jev, llm):
+    def __init__(self, cfg, store, mail, jev, llm, memory=None):
         self.cfg = cfg
         self.store = store
         self.mail = mail
         self.jev = jev
         self.llm = llm
+        self.memory = memory
         self.lock = threading.Lock()
+
+    # ------------------------------------------------------------ memory for scripts
+    def _remember(self, tid):
+        """Has Uncle had this script before? [(thread id, score)], [] when he can't tell."""
+        if not self.memory:
+            return []
+        try:
+            kin = self.memory.remember(tid) or []
+        except Exception as exc:  # noqa: BLE001  (memory is a nicety; a letter never waits on it)
+            self.store.note(f"Couldn't ask {self.memory.name} about this one ({_err(exc)}).", tid, kind="error",
+                            public=False)
+            return []
+        if kin:
+            others = ", ".join(f"#{k}" for k, _ in kin)
+            self.store.note(f"{self.memory.name} says I've had this letter before: same script as {others}, "
+                            f"{pct(kin[0][1])} alike.", tid)
+        return kin
+
+    def _kin_line(self, kin):
+        if not kin:
+            return ""
+        best, s = kin[0]
+        t = self.store.thread(best) or {}
+        reason = t.get("close_reason") or ""
+        how = {"active": f"which I'm writing to at {t.get('scammer_addr')}",
+               "pending_approval": "which is waiting on your yes",
+               "closed": (f"whose address ({t.get('scammer_addr')}) bounced" if "bounced" in reason
+                          else f"which is over ({reason or 'closed'})")}.get(t.get("status"), "which we passed on")
+        return (f"{self.memory.name} remembers this script: it's {pct(s)} like #{best} "
+                f"(\"{(t.get('scam_subject') or '')[:60]}\"), {how}. A new address on an old script is how they "
+                "keep going after a mailbox gets shut down.\n\n")
 
     # ------------------------------------------------------------ entry points
     def handle(self, message_id):
@@ -177,7 +209,14 @@ class Engine:
     def rounds(self):
         """Uncle's mailbox check, whenever something wakes him: pick up missed mail, then follow up once on
         any first letter that has gone a day without an answer."""
-        return {"caught_up": self.catch_up(), "nudged": self.nudge_due()}
+        out = {"caught_up": self.catch_up(), "nudged": self.nudge_due()}
+        if self.memory:
+            try:
+                out["remembered"] = self.memory.backfill()
+            except Exception as exc:  # noqa: BLE001
+                self.store.note(f"Couldn't fill in {self.memory.name}'s memory ({_err(exc)}).", kind="error",
+                                public=False)
+        return out
 
     def nudge_due(self, now=None):
         with self.lock:
@@ -283,7 +322,7 @@ class Engine:
         if problems:
             self.store.note(f"My first draft broke a rule ({', '.join(sorted(set(problems)))}), so I rewrote it.",
                             tid, public=False)
-        self._ask_approval(msg, tid, kind, p, to, letter)
+        self._ask_approval(msg, tid, kind, p, to, letter, extra=self._kin_line(self._remember(tid)))
         return tid
 
     def _pick_address(self, scam):
@@ -533,7 +572,7 @@ class Engine:
             f"Somebody ({sender}) forwarded me {kind_a(kind)} scam. {self.jev.name} puts it at {pct(p)}.\n\n"
             f"I'd like to write to: {to}\n\n"
             "Only say yes if you know who sent it. A stranger could fake a forward to set me on someone "
-            "innocent.\n\n"
+            f"innocent.\n\n{self._kin_line(self._remember(tid))}"
             f"Here's my letter:\n\n{letter}\n\n"
             "Reply \"yes\" and I'll send it. Reply \"no\" and I'll leave them be.\n\nVern")) or {}
         self.store.update_thread(tid, owner_thread_id=res.get("thread_id"), owner_message_id=res.get("message_id"))
@@ -568,7 +607,7 @@ class Engine:
         owner = self.cfg.owner_emails[0]
         res = self.mail.send(self.cfg.inbox, owner, f"A scammer wrote to me: {msg.get('subject', '')}"[:150], (
             f"Someone wrote to me directly. {self.jev.name} says {pct(p)} it's {kind_a(kind)} scam.\n\n"
-            f"From: {sender}\n\nHere's what I'd write back:\n\n{letter}\n\n"
+            f"From: {sender}\n\n{self._kin_line(self._remember(tid))}Here's what I'd write back:\n\n{letter}\n\n"
             "Reply \"yes\" to send it, or \"no\".\n\nVern"))
         self.store.update_thread(tid, owner_thread_id=res.get("thread_id"), owner_message_id=res.get("message_id"))
         return tid
@@ -595,14 +634,14 @@ class Engine:
                             public=False)
             return None
 
-    def _ask_approval(self, msg, tid, kind, p, to, letter):
+    def _ask_approval(self, msg, tid, kind, p, to, letter, extra=""):
         domain = (to or "").rsplit("@", 1)[-1]
         careful = "" if intake.webmail(to) else (
             f"Careful: {domain} isn't a free email service. It could be a real business, or a mailbox the "
             "scammer broke into. Say yes only if you're sure it's theirs.\n\n")
         otid = self._tell_owner(msg, (
             f"This one's {kind_a(kind)} scam. {self.jev.name} puts it at {pct(p)}.\n\n"
-            f"I'd like to write to: {to}\n\n{careful}"
+            f"I'd like to write to: {to}\n\n{careful}{extra}"
             "Here's my letter:\n\n"
             f"{letter}\n\n"
             "Reply \"yes\" and I'll send it. Reply \"no\" and I'll leave them be.\n\nVern"))
