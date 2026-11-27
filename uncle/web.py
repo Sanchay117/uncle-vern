@@ -436,7 +436,7 @@ def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, lat
 Western Union is nearest the Piggly Wiggly. <b>Every hour a scammer spends on Uncle is an hour they don't spend
 on someone's grandma.</b></p>
 <div class="ctas"><a class="btn" href="#try">Try him on a scam</a><a class="btn ghost" href="#mailbag">Read the mailbag</a></div>
-</div>{desk(latest_scam, totals.get('uncle_letters') or 0)}</section>
+</div>{desk(latest_scam, sum(1 for t in threads if t['status'] == 'active'))}</section>
 
 <div class="ledger">
 <div><b>{odo(totals['approached'])}</b><small>Scammers written to</small></div>
