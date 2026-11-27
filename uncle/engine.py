@@ -228,6 +228,18 @@ class Engine:
             self._tell_owner(msg, "That one's a scam all right, but it only wants you to click or call, and I "
                                   "don't do either. Send me one that asks for a reply.\n\nVern")
             return tid
+        # One sender often blasts the same scam many times, sometimes with the same reply-to.
+        seen = self.store.one("SELECT id, status, close_reason FROM threads WHERE scammer_addr=? AND status IN "
+                              "('pending_approval','active','closed') ORDER BY id DESC", (to,))
+        if seen:
+            if seen["status"] == "closed":
+                why = seen["close_reason"] or "that conversation is over"
+                self._tell_owner(msg, f"I already tried {to}, and {why}. If the email has a different reply-to "
+                                      "address, put that one on the first line and send it again.\n\nVern")
+            else:
+                self._tell_owner(msg, f"I'm already writing to {to}, so one letter's enough. You can watch here: "
+                                      f"{self.cfg.public_url}/t/{seen['id']}\n\nVern")
+            return seen["id"]
         if len(self.store.active_threads()) >= self.cfg.max_active_threads:
             tid = self.store.new_thread(status="rejected", close_reason="too many open conversations", **base)
             self._tell_owner(msg, "My plate's full right now. I'll take this one when a pen pal gives up.\n\nVern")

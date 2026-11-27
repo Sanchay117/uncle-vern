@@ -489,7 +489,8 @@ class FlowTests(unittest.TestCase):
 
     def test_uncle_gossips_about_other_pen_pals_without_their_details(self):
         self.forward_and_approve()
-        mid, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        other = GMAIL_FORWARD.replace("claims.desk@barrister-office.example", "second.desk@gmail.com")
+        mid, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", other)
         self.eng.handle(mid)
         system = self.app.llm.calls[-1][0]["content"]
         self.assertIn("Your other pen pals", system)
@@ -586,6 +587,21 @@ class FlowTests(unittest.TestCase):
         self.assertIn("practice letter", self.app.store.diary(1)[0]["text"])
         self.assertNotIn(judge, self.app.home_html())
         self.assertIn(f"mailto:{INBOX}", self.app.home_html())
+
+    def test_the_same_scammer_twice_gets_one_letter(self):
+        t, _ = self.forward_and_approve()
+        n = len(self.mail.outbox)
+        mid, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.eng.handle(mid)
+        self.assertIn("I'm already writing to claims.desk@barrister-office.example", self.mail.outbox[-1]["text"])
+        self.assertEqual(len(self.mail.outbox), n + 1)
+        self.assertEqual(len(self.app.store.q("SELECT * FROM threads")), 1)
+        self.app.store.update_thread(t["id"], status="closed", close_reason="their address bounced")
+        mid2, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.eng.handle(mid2)
+        self.assertIn("I already tried claims.desk@barrister-office.example, and their address bounced",
+                      self.mail.outbox[-1]["text"])
+        self.assertEqual(len(self.app.store.q("SELECT * FROM threads")), 1)
 
     def test_the_boss_can_paste_a_scam_instead_of_forwarding(self):
         body = ("barrister.okoro77@gmail.com\n\nDear Friend, I am Barrister James Okoro. My late client left "
