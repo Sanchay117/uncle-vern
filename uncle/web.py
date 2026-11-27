@@ -40,15 +40,6 @@ def ago(t):
     return dur(time.time() - t) + " ago"
 
 
-def money(x):
-    x = float(x or 0)
-    if x == 0:
-        return "$0.00"
-    if x < 0.01:
-        return f"${x:.4f}"
-    return f"${x:.2f}"
-
-
 def num(n):
     return f"{int(n or 0):,}"
 
@@ -227,6 +218,7 @@ h2 small{font:13px/1 system-ui,sans-serif;color:var(--soft);margin-left:10px;let
 .empty{background:var(--paper);border:1px dashed var(--line);padding:24px;font:22px/1.2 "Caveat",cursive}
 
 /* try */
+.bymail{margin:18px 0 0;padding:14px 18px;background:var(--paper);border:1px dashed var(--line);font-size:16px}
 .try{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start}
 .try textarea{width:100%;min-height:250px;font:15px/1.6 "Courier Prime",ui-monospace,monospace;padding:16px;
   border:0;background:var(--office) url("%CRUMPLE%");background-size:700px;background-blend-mode:multiply;color:var(--ink);
@@ -534,6 +526,14 @@ def share_bar(cfg, t, card_url):
             'a.textContent="Link copied";});});});</script>')
 
 
+def by_mail(cfg):
+    if not cfg.inbox:
+        return ""
+    return (f'<p class="bymail"><b>Or try him by email.</b> Forward a scam from your own inbox to '
+            f'<a href="mailto:{esc(cfg.inbox)}">{esc(cfg.inbox)}</a>. The email wakes him up, and he mails you '
+            "the letter he'd send, usually within a minute. Nothing goes to the scammer.</p>")
+
+
 def desk(latest_scam, letters_out=0):
     """Hero still life: the newest real scammer letter under Uncle's sticky note."""
     if latest_scam:
@@ -570,14 +570,14 @@ on someone's grandma.</b></p>
 <div class="big"><b>{esc(dur(wasted) if wasted else "0 min")}</b><small>Scammer time wasted (est.)</small></div>
 <div><b>{odo(totals['approached'])}</b><small>Scammers written to</small></div>
 <div><b>{odo(totals['bit'])}</b><small>Wrote back</small></div>
+<div><b>{odo(totals['uncle_letters'])}</b><small>Letters from Uncle</small></div>
 <div><b>{odo(totals['scammer_letters'])}</b><small>Letters from scammers</small></div>
 <div><b>{odo(totals['scammer_words'])}</b><small>Words scammers typed</small></div>
 <div><b>{esc(hook)}</b><small>Longest on the hook</small></div>
-<div><b>{money(meter.get('cost_usd'))}</b><small>Uncle's running cost, all in</small></div>
 </div>
 <p class="foot-note">Uncle has been awake {esc(dur(meter.get('awake_s', 0)))} in total, over {num(meter.get('wakes'))}
-wake-ups. The rest of the time he's asleep on a Fly.io Sprite, and the next letter wakes him. The cost is his
-own estimate from Fly's published rates and his CPU and memory meters. Time wasted is an estimate too: his
+wake-ups. The rest of the time he's asleep on a Fly.io Sprite, and the next letter wakes him. Time wasted is an
+estimate: his
 letters in conversations where the scammer wrote back, read at {READ_WPM} words a minute, plus every word they
 typed, at {WRITE_WPM} a minute.</p>
 {wake_strip(wakes, time.time())}
@@ -592,6 +592,7 @@ placeholder="Paste a scam email here.&#10;&#10;Dear Beloved, I am Barrister ... 
 <p><button class="btn" type="submit">Ask Uncle to write back</button></p></form>
 <div class="out" id="out"><div class="wait">Uncle's letter will appear here.</div></div>
 </div>
+{by_mail(cfg)}
 
 <h2>How it works</h2>
 <div class="steps">

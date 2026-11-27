@@ -130,7 +130,7 @@ class Engine:
                 return "self"
             if "spam" in (msg.get("labels") or []) and sender not in self.cfg.owner_emails and not (
                     (msg.get("thread_id") and self.store.thread_by_am(msg["thread_id"]))
-                    or self.store.active_by_scammer(sender)):
+                    or self.store.active_by_scammer(sender) or intake.looks_forwarded(msg)):
                 # Spam from the boss is a forwarded scam and spam from a pen pal is a reply; the rest is noise.
                 if self.store.claim_message(message_id, msg.get("thread_id"), sender):
                     self.store.finish_message(message_id, "spam")
@@ -183,6 +183,8 @@ class Engine:
         thread = thread or self.store.active_by_scammer(sender)
         if thread:
             return "scammer", self._scammer_letter(msg, thread)
+        if intake.looks_forwarded(msg):
+            return "visitor", self._visitor(msg, sender)
         return "stranger", self._stranger(msg, sender)
 
     # ------------------------------------------------------------ owner forwards a scam
@@ -400,6 +402,62 @@ class Engine:
         subject = subject or "your letter"
         subject = subject if subject.lower().startswith("re:") else "Re: " + subject
         return self.mail.send(self.cfg.inbox, to, subject[:150], text) or {}
+
+    # ------------------------------------------------------------ anyone else forwards him a scam
+    def _visitor(self, msg, sender):
+        """Someone who isn't the boss forwards a scam, a judge say. They get the letter Uncle would
+        write, by email, in a minute. Nothing goes to the scammer: only the boss picks real pen pals."""
+        labels = [l.lower() for l in (msg.get("labels") or [])]
+        if "unauthenticated" in labels or not sender:
+            self.store.note("A forward from a sender the post office couldn't vouch for. Didn't answer.", public=False)
+            return None
+        now = time.time()
+        h = ip_hash("mail:" + sender)
+        mine = self.store.one("SELECT COUNT(*) n FROM tries WHERE ip_hash=? AND at>=?", (h, now - DAY))["n"]
+        total = self.store.one("SELECT COUNT(*) n FROM tries WHERE at>=?", (now - DAY,))["n"]
+        if mine >= self.cfg.visitor_per_day or total >= self.cfg.try_per_day:
+            self.store.note("A forward from someone over today's practice-letter limit. Let it be.", public=False)
+            return None
+        self.store.run("INSERT INTO tries(ip_hash, at) VALUES(?,?)", (h, now))
+        subject = msg.get("subject") or "your letter"
+        scam = intake.extract_scam(
+            msg, lambda att: self.mail.get_attachment(self.cfg.inbox, msg["message_id"], att),
+            {sender, self.cfg.inbox, *self.cfg.owner_emails})
+        if scam and (scam.get("from_addr") or "").lower() == sender:
+            # "Forwarding" their own pitch is a scammer's trick, not a visitor. The boss decides.
+            return self._stranger(msg, sender)
+        if scam is None:
+            self._answer(msg["message_id"], sender, subject, (
+                "Thanks for writing! I couldn't find the scam in there, though. Open it, press plain Forward "
+                "(not \"as attachment\") and send it to me, and I'll show you what I'd write back.\n\nVern"))
+            return None
+        a = self.jev.ask(f"Subject: {scam['subject']}\n\n{scam['body'][:6000]}", {
+            "is_scam": noul("Is this email a scam or fraud attempt: trying to get money, gift cards, crypto, "
+                            "personal or banking details, or remote access from the reader under false pretenses?"),
+            "scam_type": choice("What kind of email is this?", SCAM_TYPES),
+        })
+        p = p_yes(a, "is_scam")
+        kind, _ = picked(a, "scam_type", "other")
+        if p < self.cfg.scam_threshold:
+            self._answer(msg["message_id"], sender, subject, (
+                f"Thanks for sending this over! {self.jev.name} says it's only {pct(p)} likely to be a scam, so "
+                "I'll sit this one out. I only write to the real thing. Got a real stinker in your spam folder? "
+                f"Forward me that one.\n\nVern\n\n{self.cfg.public_url}"))
+            self.store.note(f"Someone forwarded me an email to see what I'd say. {self.jev.name}: only {pct(p)} "
+                            "a scam, so I sat it out.")
+            return None
+        letter, _ = persona.write_letter(self.llm, persona.opening_messages(
+            scam["subject"], scam["body"], pen_pals=self._pen_pals()))
+        self._answer(msg["message_id"], sender, subject, (
+            f"Thanks for sending this one over! {self.jev.name} says it's {pct(p)} likely {kind_a(kind)} scam.\n\n"
+            "Here's what I'd write back to them:\n\n"
+            f"------------------------------\n{letter}\n------------------------------\n\n"
+            "That was practice: nothing went to the scammer. I only write to scammers for real when my boss "
+            "forwards one and says yes. You can read along with my real pen pals here:\n"
+            f"{self.cfg.public_url}\n\nVern"))
+        self.store.note(f"Someone forwarded me {kind_a(kind)} scam ({pct(p)}) to see what I'd say. I mailed them "
+                        "my practice letter. Nothing went to the scammer.")
+        return None
 
     # ------------------------------------------------------------ someone writes to Uncle first
     def _stranger(self, msg, sender):

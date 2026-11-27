@@ -130,6 +130,21 @@ def candidates(parsed, exclude):
     return order
 
 
+def looks_forwarded(message):
+    """True when someone is passing along another person's email: a Fwd: subject, a forward
+    marker in the body, or an attached .eml."""
+    if re.match(r"\s*(fwd?|fw)\s*:", message.get("subject") or "", re.I):
+        return True
+    for att in message.get("attachments") or []:
+        if (att.get("content_type") or "").lower() == "message/rfc822" or \
+                (att.get("filename") or "").lower().endswith(".eml"):
+            return True
+    # Gmail's and Apple Mail's forward markers only; Outlook's "Original Message" also heads reply chains,
+    # which scammers fake to look legitimate (an Outlook forward says "FW:" in the subject anyway).
+    text = (message.get("text") or "") + "\n" + strip_html(message.get("html") or "")
+    return any(m.search(text) for m in FWD_MARKERS[:2])
+
+
 def extract_scam(message, fetch_attachment, exclude):
     """From an AgentMail message (dict) find the forwarded scam.
 

@@ -541,6 +541,42 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(redact.names_in("Kindly reply.\n\nBest regards,\nPeter Obi"), ["Peter Obi"])
         self.assertEqual(redact.names_in("Thanks,\nsend the fee today and God bless you"), [])
 
+    def test_a_visitor_forward_gets_a_practice_letter_and_the_scammer_gets_nothing(self):
+        judge = "judge@fly.example"
+        mid, _ = self.mail.deliver(judge, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.mail.messages[mid]["labels"].append("spam")  # forwarded scams usually arrive marked spam
+        self.assertEqual(self.eng.handle(mid), "visitor")
+        self.assertEqual(len(self.mail.outbox), 1)
+        out = self.mail.outbox[0]
+        self.assertEqual(out["kind"], "reply")
+        self.assertIn("Here's what I'd write back", out["text"])
+        self.assertIn("nothing went to the scammer", out["text"])
+        self.assertEqual(self.app.store.q("SELECT * FROM threads"), [])  # no pen pal, no approval asked
+        self.assertIn("practice letter", self.app.store.diary(1)[0]["text"])
+        self.assertNotIn(judge, self.app.home_html())
+        self.assertIn(f"mailto:{INBOX}", self.app.home_html())
+
+    def test_visitor_limits_and_non_scams(self):
+        judge = "judge@fly.example"
+        mid, _ = self.mail.deliver(judge, "Fwd: lunch", "---------- Forwarded message ---------\nFrom: Sam "
+                                   "<sam@friend.example>\nSubject: lunch\n\nLunch on Thursday at noon?")
+        self.eng.handle(mid)
+        self.assertEqual(len(self.mail.outbox), 1)
+        self.assertIn("sit this one out", self.mail.outbox[0]["text"])
+        self.app.cfg.visitor_per_day = 1
+        mid2, _ = self.mail.deliver(judge, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.assertEqual(self.eng.handle(mid2), "visitor")
+        self.assertEqual(len(self.mail.outbox), 1)  # over the limit: no more mail
+        # A scammer "forwarding" their own pitch is not a visitor: no practice letter goes back to them.
+        fake, _ = self.mail.deliver("james.okoro@outlook-mail.example", "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.mail.messages[fake]["labels"].append("spam")
+        self.eng.handle(fake)
+        self.assertEqual(len(self.mail.outbox), 1)
+        forged, _ = self.mail.deliver("other@fly.example", "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.mail.messages[forged]["labels"].append("unauthenticated")
+        self.eng.handle(forged)
+        self.assertEqual(len(self.mail.outbox), 1)
+
     def test_stop_request_closes(self):
         t, sent = self.forward_and_approve()
         n_before = len(self.mail.outbox)

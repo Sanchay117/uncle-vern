@@ -35,5 +35,7 @@ class Config:
         self.max_letters_day = int(e("MAX_LETTERS_DAY", "80"))
         self.try_per_ip_hour = int(e("TRY_PER_IP_HOUR", "6"))
         self.try_per_day = int(e("TRY_PER_DAY", "300"))
+        # Practice letters by email for anyone else who forwards Uncle a scam (judges, friends), per sender.
+        self.visitor_per_day = int(e("VISITOR_PER_DAY", "5"))
         for k, v in overrides.items():
             setattr(self, k, v)
