@@ -55,7 +55,7 @@ def num(n):
 SCAM_LABEL = {
     "advance_fee": "Inheritance / prize", "tech_support": "Fake renewal", "romance": "Romance",
     "job": "Easy money job", "investment": "Crypto pitch", "phishing": "Phishing",
-    "extortion": "Blackmail", "other": "Other",
+    "extortion": "Blackmail", "probe": "Address check", "other": "Other",
 }
 
 

@@ -5,6 +5,7 @@
   python3 -m uncle.setup inbox uncle.vern      # create Uncle's AgentMail inbox
   python3 -m uncle.setup webhook https://<sprite-url>/webhook/agentmail [inbox]
   python3 -m uncle.setup webhooks [inbox]      # list the inbox's webhooks
+  python3 -m uncle.setup judge file.txt        # what the decider says about an email (first line: subject)
 """
 import json
 import os
@@ -86,6 +87,19 @@ def main(argv):
         hook = clients.AgentMail().create_webhook(argv[1], inbox)
         hook.pop("secret", None)  # not needed: Uncle re-fetches every message through the gateway
         print(json.dumps(hook, indent=2))
+    elif argv[0] == "judge":
+        from .server import pick_decider
+        from .engine import intake_questions, intake_state
+        with open(argv[1], encoding="utf-8") as f:
+            subject, _, body = f.read().partition("\n")
+        which = pick_decider(os.environ.get("UNCLE_DECIDER", "auto"))
+        if which == "anthropic":
+            from .claude import Claude
+            decider = Claude()
+        else:
+            decider = clients.Jev(provider=which)
+        print(f"{decider.name}:", json.dumps(decider.ask(intake_state(subject.strip(), body.strip()),
+                                                         intake_questions()), indent=2))
     elif argv[0] == "webhooks":
         inbox = argv[1] if len(argv) > 1 else os.environ["UNCLE_INBOX"]
         hooks = clients.AgentMail().list_webhooks(inbox)

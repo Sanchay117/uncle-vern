@@ -28,7 +28,7 @@ class Config:
         self.think = e("UNCLE_THINK", "low")  # gpt-oss takes low/medium/high; others take true/false
         self.mock = e("UNCLE_MOCK", "") == "1"
         # Guard rails
-        self.scam_threshold = float(e("SCAM_THRESHOLD", "0.85"))
+        self.scam_threshold = float(e("SCAM_THRESHOLD", "0.75"))
         self.stranger_threshold = float(e("STRANGER_THRESHOLD", "0.92"))
         self.max_active_threads = int(e("MAX_ACTIVE_THREADS", "20"))
         self.max_letters_per_thread_day = int(e("MAX_LETTERS_PER_THREAD_DAY", "6"))

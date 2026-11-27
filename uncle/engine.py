@@ -24,8 +24,27 @@ SCAM_TYPES = {
     "investment": "Crypto, trading or investment opportunity",
     "phishing": "Fake account, password, delivery or security alert that wants the reader to click a link or log in",
     "extortion": "Threat or blackmail, for example a claim to have compromising video",
+    "probe": "A short first message from a stranger that only checks the address is live "
+             "(\"is this the right email?\"), with the pitch held back for whoever replies",
     "other": "Some other kind of scam, or not a scam",
 }
+
+def intake_state(subject, body):
+    return f"Subject: {subject}\n\n{body[:6000]}"
+
+
+def intake_questions():
+    """What the decider is asked about every forwarded email."""
+    return {
+        "is_scam": noul("Is this email a scam or fraud attempt: trying to get money, gift cards, crypto, "
+                        "personal or banking details, or remote access from the reader under false pretenses? "
+                        "Count the opening move of one too: a vague note from a stranger who only wants to "
+                        "know whether the address is live, which is how many scams start before the pitch. "
+                        "The reader's own family, friends or real contacts asking that are not scams."),
+        "wants_email_reply": noul("Does the email ask the reader to reply by email or write to an email address?"),
+        "scam_type": choice("What kind of email is this?", SCAM_TYPES),
+    }
+
 
 ASKING_FOR = {
     "money_transfer": "Send money by wire, Western Union, MoneyGram or bank transfer",
@@ -71,7 +90,7 @@ def pct(p):
 
 def kind_a(kind):
     """'an advance fee', 'a romance'."""
-    words = (kind or "other").replace("_", " ")
+    words = {"probe": "address-check"}.get(kind, (kind or "other").replace("_", " "))
     return ("an " if words[0] in "aeiou" else "a ") + words
 
 
@@ -153,13 +172,7 @@ class Engine:
                                   "attachment) on the scam itself and send it to me.\n\nVern")
             self.store.note("Got a note from the boss with no scam inside, so I asked for the real thing.")
             return None
-        state = f"Subject: {scam['subject']}\n\n{scam['body'][:6000]}"
-        a = self.jev.ask(state, {
-            "is_scam": noul("Is this email a scam or fraud attempt: trying to get money, gift cards, crypto, "
-                            "personal or banking details, or remote access from the reader under false pretenses?"),
-            "wants_email_reply": noul("Does the email ask the reader to reply by email or write to an email address?"),
-            "scam_type": choice("What kind of email is this?", SCAM_TYPES),
-        })
+        a = self.jev.ask(intake_state(scam["subject"], scam["body"]), intake_questions())
         p = p_yes(a, "is_scam")
         p_reply = p_yes(a, "wants_email_reply")
         kind, _ = picked(a, "scam_type", "other")
