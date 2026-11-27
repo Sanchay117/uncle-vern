@@ -28,6 +28,35 @@ def private(text):
     return text or ""
 
 
+TITLES = {"mr", "mrs", "ms", "miss", "dr", "barrister", "prof", "rev", "sir", "engr", "chief"}
+NAME_RE = re.compile(r"[A-Z][a-zA-Z'.\-]+(?:\s+[A-Z][a-zA-Z'.\-]+){0,3}")
+# Uncle's own people, who are made up and stay on the page.
+CAST = {"Vern", "Pickett", "June", "Dale", "Doug", "Darlene", "Marlene"}
+
+
+def names_in(text):
+    """Names a scammer goes by in a letter: after a title (Dr. X) or under the sign-off."""
+    out = [m.group(2) for m in TITLE_NAME_RE.finditer(text or "")]
+    out += [m.group(2).strip() for m in SIGN_OFF_RE.finditer(text or "") if NAME_RE.fullmatch(m.group(2).strip())]
+    return out
+
+
+def hide_names(text, names=()):
+    """Uncle's letters on the page: his words stay, the names the scammer goes by are blacked out,
+    the same as in their own letters."""
+    def titled(m):
+        if m.group(2).split()[0] in CAST:
+            return m.group(0)
+        return m.group(0)[:m.start(2) - m.start(0)] + bar(m.group(2))
+    t = TITLE_NAME_RE.sub(titled, private(text))
+    for n in names:
+        for part in re.split(r"\s+", n or ""):
+            part = part.strip(".,;:")
+            if len(part) > 2 and part.lower() not in TITLES and part not in CAST:
+                t = re.sub(r"\b" + re.escape(part) + r"\b", lambda m: bar(m.group()), t)
+    return t
+
+
 def subject(text):
     """A scam's subject line, as the public page shows it."""
     return redact(text).replace("\n", " ")

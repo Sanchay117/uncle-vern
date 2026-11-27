@@ -6,7 +6,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import awake, claude, clients, gateway, meter, web
+from . import awake, card, claude, clients, gateway, meter, redact, web
 from .config import Config
 from .engine import Engine
 from .store import Store
@@ -64,6 +64,7 @@ class App:
         self.engine = Engine(self.cfg, self.store, self.mail, self.jev, self.llm)
         self.meter = meter.Meter(self.store)
         self.jobs = queue.Queue()
+        self.cards = {}  # key -> (version, png)
 
     def start_background(self):
         self.meter.start()
@@ -87,20 +88,74 @@ class App:
     def meter_stats(self):
         return meter.stats(self.store, self.meter.boot_id)
 
-    def home_html(self):
-        threads = self.store.public_threads()
-        letters = {t["id"]: self.store.letters(t["id"]) for t in threads}
-        theirs = [l for ls in letters.values() for l in ls if l["direction"] == "scammer" and l["public_body"]]
-        latest = max(theirs, key=lambda l: l["sent_at"] or 0) if theirs else None
-        return web.home(self.cfg, self.store.totals(), self.meter_stats(), threads, letters,
-                        self.store.diary(25), gateway.keys_on_box(), latest_scam=latest)
-
-    def thread_html(self, tid):
+    def _public_thread(self, tid):
         t = self.store.thread(tid)
         if not t or t["hidden"] or t["status"] not in ("active", "closed") or not t["approved_at"]:
             return None
-        return web.thread_page(self.cfg, self.meter_stats(), t, self.store.letters(tid),
-                               self.store.diary(50, tid))
+        return t
+
+    def _letters(self, t):
+        """A conversation's letters for the page, with the scammer's names blacked out of Uncle's too."""
+        rows = self.store.letters(t["id"])
+        names = [t["scammer_name"]] + redact.names_in(t["scam_text"])
+        names += [n for l in rows if l["direction"] == "scammer" for n in redact.names_in(l["body"])]
+        names = [n for n in names if n]
+        for l in rows:
+            if l["direction"] == "uncle" and l["public_body"]:
+                l["public_body"] = redact.hide_names(l["public_body"], names)
+        return rows
+
+    def _card_spec(self, key):
+        """(version, spec) for a share card: 'home' or a thread id. The version changes with each letter."""
+        if key == "home":
+            threads = self.store.public_threads()
+            mine = [l for t in threads for l in self._letters(t) if l["direction"] == "uncle" and l["public_body"]]
+            mine = max(mine, key=lambda l: l["sent_at"] or 0) if mine else None
+            totals = self.store.totals()
+            return (f"{totals['uncle_letters']}-{totals['scammer_letters']}-{len(threads)}",
+                    web.home_share(self.cfg, totals, mine))
+        t = self._public_thread(key)
+        if not t:
+            return None, None
+        letters = self._letters(t)
+        return f"{len(letters)}-{t['status']}", web.thread_share(self.cfg, t, letters)
+
+    def card_url(self, key):
+        if not card.available():
+            return None
+        version, _ = self._card_spec(key)
+        return f"{self.cfg.public_url}/card/{key}.png?v={version}" if version else None
+
+    def card_png(self, key):
+        if not card.available():
+            return None
+        version, spec = self._card_spec(key)
+        if not spec:
+            return None
+        hit = self.cards.get(key)
+        if hit and hit[0] == version:
+            return hit[1]
+        png = card.render(**spec)
+        self.cards[key] = (version, png)
+        return png
+
+    def home_html(self):
+        threads = self.store.public_threads()
+        letters = {t["id"]: self._letters(t) for t in threads}
+        theirs = [l for ls in letters.values() for l in ls if l["direction"] == "scammer" and l["public_body"]]
+        latest = max(theirs, key=lambda l: l["sent_at"] or 0) if theirs else None
+        return web.home(self.cfg, self.store.totals(), self.meter_stats(), threads, letters,
+                        self.store.diary(25), gateway.keys_on_box(), latest_scam=latest,
+                        wakes=self.store.q("SELECT started_at, last_seen FROM boots WHERE last_seen>=?",
+                                           (time.time() - 86400,)),
+                        card=self.card_url("home"))
+
+    def thread_html(self, tid):
+        t = self._public_thread(tid)
+        if not t:
+            return None
+        return web.thread_page(self.cfg, self.meter_stats(), t, self._letters(t),
+                               self.store.diary(50, tid), card=self.card_url(tid))
 
     def stats(self):
         return {"totals": self.store.totals(), "meter": self.meter_stats(), "keys_on_box": gateway.keys_on_box(),
@@ -147,6 +202,13 @@ def make_handler(app):
                 if m:
                     h = app.thread_html(int(m.group(1)))
                     return self._send(200, h) if h else self._send(404, web.page("Not here", "<p>No such letter.</p>"))
+                m = re.fullmatch(r"/card/(home|\d+)\.png", path)
+                if m:
+                    key = m.group(1)
+                    png = app.card_png(key if key == "home" else int(key))
+                    if not png:
+                        return self._send(404, web.page("Not here", "<p>No such card.</p>"))
+                    return self._send(200, png, "image/png", cache="public, max-age=300")
                 if path == "/api/stats":
                     return self._json(200, app.stats())
                 if path == "/healthz":

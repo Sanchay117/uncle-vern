@@ -188,6 +188,14 @@ h1 em{font-style:italic;color:var(--red);white-space:nowrap}
 .ledger{display:grid;grid-template-columns:repeat(6,1fr);background:var(--paper);border:2px solid var(--ink);margin:30px 0 8px}
 .ledger div{padding:14px 14px 12px;border-right:1px dashed var(--line)}
 .ledger div:last-child{border-right:0}
+.ledger .big{grid-column:1/-1;border-right:0;border-bottom:2px solid var(--ink);display:flex;align-items:baseline;
+  flex-wrap:wrap;gap:4px 16px;padding:16px 16px 14px}
+.ledger .big b{font-size:46px;color:var(--red)}.ledger .big small{margin:0;font-size:12px}
+.share{margin:14px 0 0;font:15px/1.5 system-ui,sans-serif;color:var(--soft)}
+.wakebox{margin:18px 0 6px}.wakes{display:block;width:100%;height:36px;color:var(--ink)}
+.ticks{display:flex;justify-content:space-between;font:13px system-ui,sans-serif;color:var(--soft);margin:4px 0 0}
+.wakes rect{fill:var(--ink)}.wakes text{font:13px system-ui,sans-serif;fill:var(--soft)}
+.wakebox p{margin:6px 0 0;font:13px/1.45 system-ui,sans-serif;color:var(--soft)}
 .ledger b{display:block;font-size:30px;line-height:1.05;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .ledger small{display:block;margin-top:6px;font:11px/1.3 system-ui,sans-serif;color:var(--soft);text-transform:uppercase;letter-spacing:.07em}
 .odo{display:inline-flex;overflow:hidden;height:1.1em;line-height:1.1em}
@@ -264,8 +272,8 @@ footer a{color:var(--ink)}
 footer b{color:var(--ink)}
 
 @media (max-width:860px){.hero,.try{grid-template-columns:1fr}.desk{min-height:340px;margin-top:10px}
-  .ledger{grid-template-columns:repeat(3,1fr)}.ledger div:nth-child(3){border-right:0}
-  .ledger div:nth-child(-n+3){border-bottom:1px dashed var(--line)}.steps{grid-template-columns:1fr}}
+  .ledger{grid-template-columns:repeat(3,1fr)}.ledger div:nth-child(4){border-right:0}
+  .ledger div:nth-child(n+2):nth-child(-n+4){border-bottom:1px dashed var(--line)}.steps{grid-template-columns:1fr}}
 @media (max-width:560px){body{font-size:16px}.lede{font-size:18px}.ledger{grid-template-columns:repeat(2,1fr)}
   .ledger div{border-right:0!important;border-bottom:1px dashed var(--line)}.ledger b{font-size:25px}
   .diary li{grid-template-columns:1fr;gap:2px}.conv .u,.conv .s{margin:0}.sticky{width:170px;font-size:22px}
@@ -319,11 +327,19 @@ FAVICON = "data:image/svg+xml," + urllib.parse.quote(re.sub(r"\s+", " ", """<svg
 <path d='M6 48 l6 -6 M14 50 l6 -6 M22 50 l6 -6' stroke='#2b4c8c' stroke-width='3'/></svg>""").strip(), safe="")
 
 
-def page(title, body, desc="Uncle Vern answers scam emails, at length, so scammers waste their time on him."):
+def page(title, body, desc="Uncle Vern answers scam emails, at length, so scammers waste their time on him.",
+         image=None, url=None):
+    share = ""
+    if image:
+        share = (f'<meta property="og:image" content="{esc(image)}"><meta property="og:image:width" content="1200">'
+                 f'<meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image">'
+                 f'<meta name="twitter:image" content="{esc(image)}">')
+    if url:
+        share += f'<meta property="og:url" content="{esc(url)}"><meta property="og:type" content="website">'
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title><meta name="description" content="{esc(desc)}">
-<meta property="og:title" content="{esc(title)}"><meta property="og:description" content="{esc(desc)}">
+<meta property="og:title" content="{esc(title)}"><meta property="og:description" content="{esc(desc)}">{share}
 <meta name="theme-color" content="#e9dfcb"><link rel="icon" href="{FAVICON}">
 {FONTS}<style>{CSS}</style></head><body>{FILTERS}<div class="airmail"></div><div class="wrap">{body}</div>
 <script>{ODO_JS}</script></body></html>"""
@@ -408,6 +424,116 @@ def thread_card(t, letters):
 <p><b>{who}:</b> {letter_body(last[:400])}</p></a>"""
 
 
+def wake_strip(wakes, now, hours=24):
+    """Uncle's last day as a strip: an ink mark for each stretch he was awake, a dotted line where he slept.
+
+    wakes: rows with started_at and last_seen (the meter's heartbeat), any order."""
+    span = hours * 3600
+    start = now - span
+
+    def x(t):
+        return 10 + 980 * (max(start, min(now, t)) - start) / span
+
+    marks, awake = [], 0
+    for w in wakes:
+        a = w["started_at"]
+        b = max(w["last_seen"] or a, a)
+        if b < start or a > now:
+            continue
+        awake += min(b, now) - max(a, start)
+        marks.append(f'<rect x="{x(a):.1f}" y="4" width="{max(3.0, x(b) - x(a)):.1f}" height="28"/>')
+    # Labels in HTML, not the SVG, so they stay readable when the strip shrinks to a phone's width.
+    ticks = "".join(f'<span>{"now" if h == 0 else f"{h} h ago"}</span>' for h in range(hours, -1, -6))
+    return f"""<div class="wakebox"><svg class="wakes" viewBox="0 0 1000 36" preserveAspectRatio="none" role="img"
+ aria-label="Uncle's last {hours} hours: {len(marks)} times awake, asleep the rest">
+<path d="M10 18 H990" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 6" vector-effect="non-scaling-stroke"/>{''.join(marks)}</svg>
+<div class="ticks">{ticks}</div>
+<p><b>Uncle's last {hours} hours.</b> Each mark is a stretch he was awake: a letter came in, someone tried him,
+or he was looked in on. Awake {esc(dur(awake)) if awake else "0 s"} in all, over {len(marks)} wake-up{"" if len(marks) == 1 else "s"}; asleep the rest.</p></div>"""
+
+
+READ_WPM, WRITE_WPM = 200, 25
+
+
+def wasted_seconds(totals):
+    """A scammer's time spent on Uncle: reading his letters (only where they wrote back, so we know they
+    read them) at READ_WPM, plus writing their own at WRITE_WPM, a typical pace for composing an email."""
+    return round(60 * ((totals.get("uncle_words_read") or 0) / READ_WPM
+                       + (totals.get("scammer_words") or 0) / WRITE_WPM))
+
+
+def rough(s):
+    """A spoken-aloud duration for the share card: 'about 12 minutes'."""
+    s = float(s or 0)
+    if s < 90:
+        return "about a minute"
+    if s < 5400:
+        return f"about {round(s / 60)} minutes"
+    return f"about {s / 3600:.1f} hours".replace(".0 ", " ")
+
+
+def host(cfg):
+    return re.sub(r"^https?://", "", cfg.public_url)
+
+
+def thread_share(cfg, t, letters):
+    """What the share card for one conversation says."""
+    mine = [l for l in letters if l["direction"] == "uncle" and l["public_body"]]
+    theirs = [l for l in letters if l["direction"] == "scammer"]
+    subject = redact.subject(t["scam_subject"]) or ""
+    title = f"Uncle Vern vs. \u201c{subject}\u201d" if subject else "Uncle Vern vs. a scammer"
+    facts = [f"{SCAM_LABEL.get(t['scam_type'], 'Scam')} scam"]
+    if t["status"] == "closed":
+        facts.append(f"Closed: {t['close_reason'] or 'done'}")
+    elif t["first_bite_at"]:
+        facts.append(f"On the hook for {rough((t['last_scammer_at'] or 0) - (t['approved_at'] or 0))}")
+    else:
+        facts.append("Waiting for the scammer to write back")
+    facts.append(f"{len(mine)} letter{'' if len(mine) == 1 else 's'} from Uncle, {len(theirs)} back")
+    if theirs:
+        read = sum(l["words"] or 0 for l in mine)
+        wasted = wasted_seconds({"uncle_words_read": read, "scammer_words": sum(l["words"] or 0 for l in theirs)})
+        facts.append(f"{rough(wasted).capitalize()} of their time wasted")
+    return {"title": title, "letter": mine[-1]["public_body"] if mine else "", "facts": facts,
+            "url": f"{host(cfg)}/t/{t['id']}", "pct": round((t["scam_prob"] or 0) * 100),
+            "label": "UNCLE VERN'S MAILBAG"}
+
+
+SAMPLE_LETTER = """Dear Sir or Madam,
+
+I got your letter about the money and I would surely like it. My late wife June did the checkbook so you will have to be patient with me. My nephew Dale says I should not write back to strangers but you seem like a fine young man.
+
+Now which Western Union is it you want? There is one by the Piggly Wiggly but they close at four on Tuesdays.
+
+Yours truly,
+Vern"""
+
+
+def home_share(cfg, totals, latest_uncle=None):
+    wasted = wasted_seconds(totals)
+    facts = ["Forward him a scam and he writes back."]
+    if totals.get("approached"):
+        facts.append(f"{totals['approached']} scammer{'' if totals['approached'] == 1 else 's'} written to, "
+                     f"{totals.get('bit') or 0} wrote back")
+    if wasted:
+        facts.append(f"{rough(wasted).capitalize()} of scammer time wasted")
+    return {"title": "Uncle Vern answers scam emails. All of them. At length.",
+            "letter": (latest_uncle or {}).get("public_body") or SAMPLE_LETTER, "facts": facts,
+            "url": host(cfg), "pct": None, "label": "A SCAMBAITER ON A FLY.IO SPRITE"}
+
+
+def share_bar(cfg, t, card_url):
+    page_url = f"{cfg.public_url}/t/{t['id']}"
+    text = "Uncle Vern, 78, is writing back to a scammer. Read along:"
+    x = "https://x.com/intent/tweet?" + urllib.parse.urlencode({"text": text, "url": page_url})
+    card = f' · <a href="{esc(card_url)}" download="uncle-vern-{t["id"]}.png">Save the card</a>' if card_url else ""
+    return (f'<p class="share">Share this one: <a href="{esc(x)}" target="_blank" rel="noopener">Post on X</a>'
+            f' · <a href="{esc(page_url)}" class="copy">Copy the link</a>{card}</p>'
+            '<script>document.querySelectorAll(".copy").forEach(function(a){a.addEventListener("click",function(e){'
+            'if(!navigator.clipboard)return;e.preventDefault();navigator.clipboard.writeText(a.href).then(function(){'
+            'a.textContent="Link copied";});});});</script>')
+
+
 def desk(latest_scam, letters_out=0):
     """Hero still life: the newest real scammer letter under Uncle's sticky note."""
     if latest_scam:
@@ -422,13 +548,15 @@ def desk(latest_scam, letters_out=0):
 <div class="sticky">Send me your scams. I've got all the time in the world.<small>Uncle V.</small></div></div>"""
 
 
-def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, latest_scam=None):
+def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, latest_scam=None, wakes=(),
+         card=None):
     cards = "".join(thread_card(t, letters_by_thread.get(t["id"], [])) for t in threads) or \
         '<div class="empty">No pen pals yet. Uncle is sitting by the mailbox.</div>'
     diary_html = "".join(
         f'<li><time>{esc(ago(d["at"]))}</time><span>{esc(d["text"])}</span></li>' for d in diary) or \
         '<li><time></time><span>Nothing yet.</span></li>'
     hook = dur(totals["longest_hook_s"]) if totals["longest_hook_s"] else "-"
+    wasted = wasted_seconds(totals)
     body = f"""{header(meter)}
 <section class="hero"><div>
 <h1>Uncle Vern answers scam emails. <em>All of them.</em> <em>At length.</em></h1>
@@ -439,6 +567,7 @@ on someone's grandma.</b></p>
 </div>{desk(latest_scam, sum(1 for t in threads if t['status'] == 'active'))}</section>
 
 <div class="ledger">
+<div class="big"><b>{esc(dur(wasted) if wasted else "0 min")}</b><small>Scammer time wasted (est.)</small></div>
 <div><b>{odo(totals['approached'])}</b><small>Scammers written to</small></div>
 <div><b>{odo(totals['bit'])}</b><small>Wrote back</small></div>
 <div><b>{odo(totals['scammer_letters'])}</b><small>Letters from scammers</small></div>
@@ -448,7 +577,10 @@ on someone's grandma.</b></p>
 </div>
 <p class="foot-note">Uncle has been awake {esc(dur(meter.get('awake_s', 0)))} in total, over {num(meter.get('wakes'))}
 wake-ups. The rest of the time he's asleep on a Fly.io Sprite, and the next letter wakes him. The cost is his
-own estimate from Fly's published rates and his CPU and memory meters.</p>
+own estimate from Fly's published rates and his CPU and memory meters. Time wasted is an estimate too: his
+letters in conversations where the scammer wrote back, read at {READ_WPM} words a minute, plus every word they
+typed, at {WRITE_WPM} a minute.</p>
+{wake_strip(wakes, time.time())}
 
 <h2 id="mailbag">The mailbag <small>scammers' addresses, numbers, links and names are blacked out</small></h2>
 <div class="bag">{cards}</div>
@@ -485,10 +617,10 @@ scammer to talk him out of.<br>
 Credit where it's due: Netsafe's Re:scam (New Zealand, 2017) and O2's Daisy (UK, 2024) wasted scammers' time for a
 whole country. Uncle Vern is your own. · <a href="{esc(cfg.code_url)}">Code</a></footer>
 <script>{TRY_JS}</script>"""
-    return page("Uncle Vern answers scam emails", body)
+    return page("Uncle Vern answers scam emails", body, image=card, url=cfg.public_url + "/")
 
 
-def thread_page(cfg, meter, t, letters, diary):
+def thread_page(cfg, meter, t, letters, diary, card=None):
     parts = []
     for l in letters:
         if l["direction"] == "uncle":
@@ -515,12 +647,16 @@ def thread_page(cfg, meter, t, letters, diary):
 <div class="thread-head"><div class="tag" style="margin:0">{esc(SCAM_LABEL.get(t['scam_type'], 'Scam'))} ·
 {dn()} {round((t['scam_prob'] or 0) * 100)}% scam · {esc(status)}</div>
 <h1>{esc(redact.subject(t['scam_subject']) or 'A letter')}</h1>
-{frustration_meter(t['frustration']) if t['first_bite_at'] else ''}</div>
+{frustration_meter(t['frustration']) if t['first_bite_at'] else ''}{share_bar(cfg, t, card)}</div>
 <div class="conv">{''.join(parts)}</div>
 <h2>Uncle's diary for this one</h2><ul class="diary">{diary_html}</ul>
 {SCENE}
 <footer><a href="/">Back to the mailbag</a> · Scammers' letters have addresses, numbers, links and names blacked out.</footer>"""
-    return page(f"Uncle Vern vs. {redact.subject(t['scam_subject']) or 'a scammer'}", body)
+    n = sum(1 for l in letters if l["direction"] == "uncle")
+    desc = (f"Uncle Vern, 78, is writing back to a scammer ({SCAM_LABEL.get(t['scam_type'], 'scam').lower()}). "
+            f"{n} letter{'' if n == 1 else 's'} from Uncle so far.")
+    return page(f"Uncle Vern vs. {redact.subject(t['scam_subject']) or 'a scammer'}", body, desc,
+                image=card, url=f"{cfg.public_url}/t/{t['id']}")
 
 
 # Rolling odometer digits, like the Buick's. Falls back to plain numbers without JS.

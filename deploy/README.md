@@ -32,6 +32,10 @@ Models
 - `UNCLE_CLAUDE_MODEL` (default `claude-opus-5-5`), `UNCLE_CLAUDE_EFFORT` (default `low`).
 - The Ollama connector blocks `/v1/systemone`, so Clef can't be reached through it today.
 
+Share cards
+- Link previews (`/card/<id>.png`, og:image) need Pillow: `python3 -m pip install --user pillow`.
+  Without it the pages still work, just with no preview image. Fonts are bundled in `uncle/fonts/` (OFL).
+
 Notes
 - `sprite file push` (CLI 2026-11-03) can report "directory ... does not exist" for a folder that
   does exist when it was made inside the Sprite. `push.sh` passes `-p`, which avoids it.

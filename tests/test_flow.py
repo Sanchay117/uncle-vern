@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from uncle import clients, gateway, intake, meter, persona, redact  # noqa: E402
+from uncle import clients, gateway, intake, meter, persona, redact, web  # noqa: E402
 from uncle.config import Config  # noqa: E402
 from uncle.server import App  # noqa: E402
 
@@ -167,6 +167,22 @@ class AgentMailConnectorTests(unittest.TestCase):
             self.assertTrue(calls[-1].endswith("/threads/t7"))
         finally:
             clients.net.request = real
+
+
+class PageMathTests(unittest.TestCase):
+    def test_time_wasted_counts_reading_and_writing(self):
+        from uncle import web
+        self.assertEqual(web.wasted_seconds({"uncle_words_read": 400, "scammer_words": 50}), 240)
+        self.assertEqual(web.wasted_seconds({}), 0)
+
+    def test_wake_strip_marks_only_the_last_day(self):
+        from uncle import web
+        now = 1_800_000_000
+        svg = web.wake_strip([{"started_at": now - 3600, "last_seen": now - 3000},
+                              {"started_at": now - 90000, "last_seen": now - 89000}], now)
+        self.assertEqual(svg.count("<rect"), 1)
+        self.assertIn("over 1 wake-up;", svg)
+        self.assertIn("Awake 10 m", svg)
 
 
 class GatewayTests(unittest.TestCase):
@@ -441,6 +457,17 @@ class FlowTests(unittest.TestCase):
         with awake.held():
             pass
 
+    def test_uncle_gossips_about_other_pen_pals_without_their_details(self):
+        self.forward_and_approve()
+        mid, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.eng.handle(mid)
+        system = self.app.llm.calls[-1][0]["content"]
+        self.assertIn("Your other pen pals", system)
+        self.assertIn("millions waiting for me", system)
+        self.assertIn("Dale", system)
+        for secret in ("claims.desk@barrister-office.example", "Okoro", "4.5"):
+            self.assertNotIn(secret, system.split("Your other pen pals")[1])
+
     def test_resend_approval(self):
         mid, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
         self.eng.handle(mid)
@@ -473,6 +500,46 @@ class FlowTests(unittest.TestCase):
         self.assertIn("URGENT", html)
         th = self.app.thread_html(t["id"])
         self.assertIn("Western Union", th)
+
+    def test_share_cards_and_link_previews(self):
+        from uncle import card
+        t, sent = self.forward_and_approve()
+        mid, _ = self.mail.deliver("claims.desk@barrister-office.example", "Re: URGENT",
+                                   "Dear Vern, kindly send the processing fee by Western Union today.",
+                                   thread_id=sent["thread_id"])
+        self.eng.handle(mid)
+        spec = web.thread_share(self.app.cfg, self.app.store.thread(t["id"]), self.app.store.letters(t["id"]))
+        self.assertEqual(spec["url"], f"uncle.example/t/{t['id']}")
+        self.assertIn("2 letters from Uncle, 1 back", spec["facts"])
+        self.assertTrue(any("of their time wasted" in f for f in spec["facts"]))
+        if not card.available():
+            self.assertIsNone(self.app.card_png(t["id"]))
+            self.skipTest("Pillow is not installed")
+        png = self.app.card_png(t["id"])
+        self.assertTrue(png.startswith(b"\x89PNG"))
+        self.assertIs(self.app.card_png(t["id"]), png)  # cached until the next letter
+        self.assertTrue(self.app.card_png("home").startswith(b"\x89PNG"))
+        th = self.app.thread_html(t["id"])
+        self.assertIn(f'og:image" content="https://uncle.example/card/{t["id"]}.png?v=', th)
+        self.assertIn("summary_large_image", th)
+        self.assertIn("x.com/intent/tweet", th)
+        self.assertIn("https://uncle.example/card/home.png?v=", self.app.home_html())
+        # A hidden conversation has no card.
+        self.app.store.update_thread(t["id"], hidden=1)
+        self.assertIsNone(self.app.card_png(t["id"]))
+
+    def test_scammer_names_are_blacked_out_of_uncles_letters_too(self):
+        t, sent = self.forward_and_approve()
+        lid = self.app.store.q("SELECT id FROM letters WHERE direction='uncle'")[0]["id"]
+        self.app.store.run("UPDATE letters SET public_body=? WHERE id=?",
+                           ("Dear Barrister Okoro,\n\nJames, my nephew Dale says hi. Doug too.\n\nVern", lid))
+        page = self.app.thread_html(t["id"])
+        for name in ("Okoro", "James"):
+            self.assertNotIn(name, page)
+        for kept in ("Dale", "Doug", "Vern"):
+            self.assertIn(kept, page)
+        self.assertEqual(redact.names_in("Kindly reply.\n\nBest regards,\nPeter Obi"), ["Peter Obi"])
+        self.assertEqual(redact.names_in("Thanks,\nsend the fee today and God bless you"), [])
 
     def test_stop_request_closes(self):
         t, sent = self.forward_and_approve()

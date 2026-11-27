@@ -199,7 +199,10 @@ class Store:
             " (SELECT COUNT(*) FROM letters WHERE direction='scammer') AS scammer_letters,"
             " (SELECT COALESCE(SUM(words),0) FROM letters WHERE direction='scammer') AS scammer_words,"
             " (SELECT COUNT(*) FROM letters WHERE direction='uncle') AS uncle_letters,"
-            " (SELECT COALESCE(SUM(words),0) FROM letters WHERE direction='uncle') AS uncle_words")
+            " (SELECT COALESCE(SUM(words),0) FROM letters WHERE direction='uncle') AS uncle_words,"
+            # Uncle's words in conversations where the scammer wrote back, so we know they were read.
+            " (SELECT COALESCE(SUM(l.words),0) FROM letters l JOIN threads t ON t.id=l.thread_id"
+            "   WHERE l.direction='uncle' AND t.first_bite_at IS NOT NULL) AS uncle_words_read")
         # On the hook: from Uncle's first letter to the scammer's latest reply.
         longest = self.one(
             "SELECT MAX(last_scammer_at - approved_at) AS span FROM threads "
