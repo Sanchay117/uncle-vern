@@ -19,9 +19,11 @@
    - `sprite-env services create uncle --cmd bash --args /home/sprite/app/run.sh --http-port 8080`
      (after changing `uncle.env`: `sprite-env services restart uncle`)
 5. `sprite config update --url-auth public` (`sprite url update` is deprecated)
-6. In the AgentMail console, add a webhook for `message.received` on Uncle's inbox, pointing at
-   `https://<url>/webhook/agentmail`. (The Fly AgentMail connector blocks `/v0/webhooks`, so
-   `python3 -m uncle.setup webhook ...` only works with a direct key, off the gateway.)
+6. Add a webhook for `message.received` on Uncle's inbox, pointing at `https://<url>/webhook/agentmail`.
+   The Fly AgentMail connector blocks every webhooks endpoint, so do it off the Sprite: in the AgentMail
+   console, or from this folder on your own machine with Uncle's inbox key:
+   `read -s AGENTMAIL_API_KEY && export AGENTMAIL_API_KEY`, then
+   `python3 -m uncle.setup webhook https://<url>/webhook/agentmail uncle.vern@agentmail.to`
 
 Models
 - Letters and decisions can each come from a different service. `UNCLE_DECIDER` = `typesafe` (Jev),

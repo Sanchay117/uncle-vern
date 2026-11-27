@@ -44,6 +44,14 @@ def check():
     except Exception as exc:  # noqa: BLE001
         print("Ollama failed:", exc)
     try:
+        from . import claude
+        c = claude.Claude()
+        a = c.ask(SAMPLE, {"is_scam": clients.noul("Is this a scam?")})
+        print(f"Decisions via Claude ({c.model}): {json.dumps(a)}")
+        print(f"Letters via Claude: {c.chat([{'role': 'user', 'content': 'Say hello like a cheerful 78-year-old, in 12 words.'}])[:300]}")
+    except Exception as exc:  # noqa: BLE001
+        print("Claude failed:", exc)
+    try:
         print("AgentMail inboxes:", json.dumps(clients.AgentMail().list_inboxes())[:1500])
     except Exception as exc:  # noqa: BLE001
         print("AgentMail failed:", exc)
