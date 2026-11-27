@@ -19,17 +19,18 @@ SERVICES = {
     "ollama": (["ollama"], "https://ollama.com", "OLLAMA_API_KEY"),
     "anthropic": (["anthropic"], "https://api.anthropic.com", "ANTHROPIC_API_KEY"),
     "pinecone": (["pinecone"], "https://api.pinecone.io", "PINECONE_API_KEY"),
+    "deepgram": (["deepgram"], "https://api.deepgram.com", "DEEPGRAM_API_KEY"),
 }
 
-# Services that take their key in a header of their own rather than "Authorization: Bearer".
-KEY_HEADER = {"pinecone": "Api-Key"}
+# Services that take their key some other way than "Authorization: Bearer <key>": (header, prefix).
+KEY_HEADER = {"pinecone": ("Api-Key", ""), "deepgram": ("Authorization", "Token ")}
 
 
 def _auth(name, key):
     if not key:
         return {}
-    h = KEY_HEADER.get(name)
-    return {h: key} if h else {"Authorization": f"Bearer {key}"}
+    header, prefix = KEY_HEADER.get(name, ("Authorization", "Bearer "))
+    return {header: prefix + key}
 
 KEY_VARS = [v[2] for v in SERVICES.values()]
 

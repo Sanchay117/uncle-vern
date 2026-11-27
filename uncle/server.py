@@ -1,12 +1,13 @@
 """Uncle's front door: the web page, the try box, and the AgentMail webhook."""
 import json
+import os
 import queue
 import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import awake, card, claude, clients, gateway, memory, meter, redact, web
+from . import awake, card, claude, clients, gateway, memory, meter, redact, voice, web
 from .config import Config
 from .engine import Engine
 from .store import Store
@@ -63,6 +64,9 @@ class App:
         web.VOICE.update(name=llm.name, maker=llm.maker)
         ranker = memory.WordsRanker() if self.cfg.mock else memory.PineconeRanker()
         self.memory = memory.Memory(self.store, ranker, same=self.cfg.memory_same)
+        speaker = voice.MockSpeaker() if self.cfg.mock else voice.Deepgram(self.cfg.voice_model)
+        self.voice = voice.Voice(os.path.join(os.path.dirname(os.path.abspath(self.cfg.db_path)), "voice"),
+                                 speaker, per_day=self.cfg.voice_per_day)
         self.engine = Engine(self.cfg, self.store, self.mail, self.jev, self.llm, memory=self.memory)
         self.meter = meter.Meter(self.store)
         self.jobs = queue.Queue()
@@ -171,7 +175,8 @@ class App:
                         wakes=self.store.q("SELECT started_at, last_seen FROM boots WHERE last_seen>=?",
                                            (time.time() - 86400,)),
                         card=self.card_url("home"), families=self.families(),
-                        memory_name=self.memory.name if self.memory.available() else None)
+                        memory_name=self.memory.name if self.memory.available() else None,
+                        voice_name=self.voice.name if self.voice.available() else None)
 
     def kin(self, t):
         """The other conversations with the same script, either way round: [(row, score)], public ones only,
@@ -208,7 +213,22 @@ class App:
             return None
         return web.thread_page(self.cfg, self.meter_stats(), t, self._letters(t),
                                self.store.diary(50, tid), card=self.card_url(tid), kin=self.kin(t),
-                               memory_name=self.memory.name)
+                               memory_name=self.memory.name, voice_on=self.voice.available())
+
+    def letter_audio(self, lid):
+        """Uncle's own letter, read aloud, from a conversation on the page. None for anything else."""
+        row = self.store.one("SELECT thread_id FROM letters WHERE id=? AND direction='uncle'", (lid,))
+        t = self._public_thread(row["thread_id"]) if row else None
+        if not t:
+            return None
+        text = next((l["public_body"] for l in self._letters(t) if l["id"] == lid), None)
+        return self.voice.audio(text) if text else None
+
+    def with_voice(self, j):
+        """Give a practice letter a link to hear it read, when Uncle has a voice."""
+        if j.get("letter") and self.voice.available():
+            j["voice"] = f"/voice/try/{self.voice.remember_try(j['letter'])}.mp3"
+        return j
 
     def stats(self):
         return {"totals": self.store.totals(), "meter": self.meter_stats(), "keys_on_box": gateway.keys_on_box(),
@@ -266,6 +286,9 @@ def make_handler(app):
                     if not png:
                         return self._send(404, web.page("Not here", "<p>No such card.</p>"))
                     return self._send(200, png, "image/png", cache="public, max-age=300")
+                m = re.fullmatch(r"/voice/(letter|try)/(\d+|[0-9a-f]{32})\.mp3", path)
+                if m:
+                    return self._voice(*m.groups())
                 if path == "/api/stats":
                     return self._json(200, app.stats())
                 if path == "/healthz":
@@ -275,6 +298,21 @@ def make_handler(app):
                 return self._send(404, web.page("Not here", "<p>No such page.</p>"))
             except Exception as exc:  # noqa: BLE001
                 return self._send(500, web.page("Oops", f"<p>Uncle tripped over Doug. ({web.esc(exc)})</p>"))
+
+        def _voice(self, kind, key):
+            nope = web.page("Not here", "<p>Uncle can't read that one out.</p>")
+            try:
+                if kind == "letter":
+                    audio = app.letter_audio(int(key)) if key.isdigit() else None
+                else:
+                    text = app.voice.try_text(key)
+                    audio = app.voice.audio(text) if text else None
+            except Exception as exc:  # noqa: BLE001
+                app.store.note(f"Voice error: {exc}", kind="error", public=False)
+                return self._send(503, nope)  # the page falls back to the browser's own voice
+            if not audio:
+                return self._send(404, nope)
+            return self._send(200, audio, "audio/mpeg", cache="public, max-age=86400")
 
         def do_POST(self):
             app.meter.touch()
@@ -298,14 +336,14 @@ def make_handler(app):
                 return self._json(200, {"ok": True})
             if path == "/api/try/reply":
                 try:
-                    return self._json(200, app.engine.try_reply(data.get("scam"), data.get("turns"),
-                                                                data.get("reply"), self._ip()))
+                    return self._json(200, app.with_voice(app.engine.try_reply(
+                        data.get("scam"), data.get("turns"), data.get("reply"), self._ip())))
                 except Exception as exc:  # noqa: BLE001
                     app.store.note(f"Try reply error: {exc}", kind="error", public=False)
                     return self._json(200, {"error": "Uncle dropped the phone. Try again in a minute."})
             if path == "/api/try":
                 try:
-                    return self._json(200, app.engine.try_uncle(data.get("text", ""), self._ip()))
+                    return self._json(200, app.with_voice(app.engine.try_uncle(data.get("text", ""), self._ip())))
                 except Exception as exc:  # noqa: BLE001
                     app.store.note(f"Try box error: {exc}", kind="error", public=False)
                     return self._json(200, {"error": "Uncle dropped the phone. Try again in a minute."})

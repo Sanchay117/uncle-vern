@@ -585,7 +585,7 @@ def desk(latest_scam, letters_out=0):
 
 
 def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, latest_scam=None, wakes=(),
-         card=None, families=(), memory_name=None):
+         card=None, families=(), memory_name=None, voice_name=None):
     cards = "".join(thread_card(t, letters_by_thread.get(t["id"], [])) for t in threads) or \
         '<div class="empty">No pen pals yet. Uncle is sitting by the mailbox.</div>'
     diary_html = "".join(
@@ -593,7 +593,8 @@ def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, lat
         '<li><time></time><span>Nothing yet.</span></li>'
     wasted = wasted_seconds(totals)
     waiting = sum(1 for t in threads if t['status'] == 'active')
-    mem =f", {esc(memory_name)} (his memory for scam scripts)" if memory_name else ""
+    mem = f", {esc(memory_name)} (his memory for scam scripts)" if memory_name else ""
+    mem += f", {esc(voice_name)} (reads his letters aloud)" if voice_name else ""
     body = f"""{header(meter)}
 <section class="hero"><div>
 <h1>Uncle Vern answers scam emails. <em>All of them.</em> <em>At length.</em></h1>
@@ -690,7 +691,7 @@ def families_section(families, memory_name):
             f'<ul class="families">{items}</ul>')
 
 
-def thread_page(cfg, meter, t, letters, diary, card=None, kin=None, memory_name="Pinecone"):
+def thread_page(cfg, meter, t, letters, diary, card=None, kin=None, memory_name="Pinecone", voice_on=False):
     parts = []
     if t.get("scam_text") and not (letters and letters[0]["direction"] == "scammer"):
         stamp = f'<div class="stampmark">{postmark(round((t["scam_prob"] or 0) * 100), "SCAM", dn().upper(), 70)}</div>'
@@ -699,8 +700,9 @@ def thread_page(cfg, meter, t, letters, diary, card=None, kin=None, memory_name=
                      f'<div class="body">{letter_body(original_scam(t)[:3000])}</div></div></div>')
     for l in letters:
         if l["direction"] == "uncle":
+            vo = f' data-voice="/voice/letter/{l["id"]}.mp3"' if voice_on and l.get("id") else ""
             parts.append(f'<div class="u"><p class="from">Uncle Vern wrote · {esc(ago(l["sent_at"]))}</p>'
-                         f'<div class="paper notepad"><div class="body">{letter_body(l["public_body"])}</div></div></div>')
+                         f'<div class="paper notepad"{vo}><div class="body">{letter_body(l["public_body"])}</div></div></div>')
         else:
             j = jev_of(l)
             stamp = ""
@@ -761,11 +763,12 @@ ODO_JS = r"""
 })();
 """
 
-# Uncle reads his letters aloud in the browser's own voice, slow and low. Free: no connector, nothing sent anywhere.
+# Uncle reads his letters aloud. With a Deepgram connector, in his own recorded voice (data-voice on the
+# letter); otherwise, or if that fails, in the browser's own voice, slow and low.
 HEAR_JS = r"""
 (function(){
-  if (!('speechSynthesis' in window) || !window.SpeechSynthesisUtterance) return;
-  var LABEL = '▶ Hear Uncle read it', voice = null, playing = null;
+  var synth = ('speechSynthesis' in window) && !!window.SpeechSynthesisUtterance;
+  var LABEL = '▶ Hear Uncle read it', voice = null, playing = null, audio = null;
   function pick(){
     var vs = speechSynthesis.getVoices() || [];
     var prefs = [/^Fred$/i, /Ralph/i, /Daniel/i, /Albert/i, /Google US English/i, /Microsoft (Guy|David|Mark)/i];
@@ -775,28 +778,47 @@ HEAR_JS = r"""
     for (var k = 0; k < vs.length; k++){ if (/^en-US/i.test(vs[k].lang)) return vs[k]; }
     return null;
   }
-  voice = pick();
-  if ('onvoiceschanged' in speechSynthesis) speechSynthesis.onvoiceschanged = function(){ voice = pick(); };
-  function stop(){ if (playing){ playing.textContent = LABEL; playing = null; } }
+  if (synth){
+    voice = pick();
+    if ('onvoiceschanged' in speechSynthesis) speechSynthesis.onvoiceschanged = function(){ voice = pick(); };
+  }
+  function stop(){
+    if (audio){ var a = audio; audio = null; a.pause(); }
+    if (synth) speechSynthesis.cancel();
+    if (playing){ playing.textContent = LABEL; playing = null; }
+  }
+  function browserVoice(paper, b){
+    var body = paper.querySelector('.body');
+    var text = (body ? body.textContent : '').replace(/█+/g, '').replace(/\s+/g, ' ').trim();
+    if (!synth || !text){ stop(); return; }
+    var u = new SpeechSynthesisUtterance(text);
+    if (voice) u.voice = voice;
+    u.rate = 0.86; u.pitch = 0.72;
+    u.onend = u.onerror = function(){ if (playing === b) stop(); };
+    playing = b; b.textContent = '■ Stop';
+    speechSynthesis.speak(u);
+  }
   function add(paper){
     if (paper.getAttribute('data-hear')) return;
+    var url = paper.getAttribute('data-voice');
+    if (!url && !synth) return;
     paper.setAttribute('data-hear', '1');
     var b = document.createElement('button');
     b.type = 'button'; b.className = 'hear'; b.textContent = LABEL;
     paper.insertAdjacentElement('afterend', b);
     b.addEventListener('click', function(){
       var mine = playing === b;
-      speechSynthesis.cancel(); stop();
+      stop();
       if (mine) return;
-      var body = paper.querySelector('.body');
-      var text = (body ? body.textContent : '').replace(/█+/g, '').replace(/\s+/g, ' ').trim();
-      if (!text) return;
-      var u = new SpeechSynthesisUtterance(text);
-      if (voice) u.voice = voice;
-      u.rate = 0.86; u.pitch = 0.72;
-      u.onend = u.onerror = function(){ if (playing === b) stop(); };
-      playing = b; b.textContent = '■ Stop';
-      speechSynthesis.speak(u);
+      if (!url) return browserVoice(paper, b);
+      var a = new Audio(url);
+      audio = a; playing = b; b.textContent = '… Uncle is finding his glasses';
+      a.onplaying = function(){ if (audio === a) b.textContent = '■ Stop'; };
+      a.onended = function(){ if (audio === a) stop(); };
+      var failed = function(){ if (audio !== a) return; audio = null; browserVoice(paper, b); };
+      a.onerror = failed;
+      var p = a.play();
+      if (p && p.catch) p.catch(failed);
     });
   }
   window.uncleHear = function(){ document.querySelectorAll('.paper.notepad').forEach(add); };
@@ -838,8 +860,9 @@ TRY_JS = r"""
   var convo = null, n = 0;
   function uncleLetter(box, j, after){
     var id = 'typed' + (++n);
+    var vo = j.voice ? ' data-voice="' + esc(j.voice) + '"' : '';
     box.insertAdjacentHTML('beforeend', '<p class="from" style="margin-top:18px">Uncle Vern wrote <span class="meta">(click to let him finish)</span></p>' +
-      '<div class="paper notepad"><div class="body" id="' + id + '"></div></div>');
+      '<div class="paper notepad"' + vo + '><div class="body" id="' + id + '"></div></div>');
     type(document.getElementById(id), j.letter, function(){ if (window.uncleHear) uncleHear(); if (after) after(); });
   }
   function replyBox(box){

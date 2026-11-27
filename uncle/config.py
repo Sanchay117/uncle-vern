@@ -41,5 +41,8 @@ class Config:
         self.nudge_after_hours = float(e("NUDGE_AFTER_HOURS", "24"))
         # How alike (0 to 1, Pinecone's reranker) two scams must be to count as the same script.
         self.memory_same = float(e("MEMORY_SAME", "0.75"))
+        # Uncle's reading voice (Deepgram Aura-2), and how many new recordings he makes a day at most.
+        self.voice_model = e("UNCLE_VOICE", "aura-2-atlas-en")
+        self.voice_per_day = int(e("VOICE_PER_DAY", "150"))
         for k, v in overrides.items():
             setattr(self, k, v)

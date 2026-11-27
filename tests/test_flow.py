@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from uncle import clients, gateway, intake, memory, meter, persona, redact, web  # noqa: E402
+from uncle import clients, gateway, intake, memory, meter, persona, redact, voice, web  # noqa: E402
 from uncle.config import Config  # noqa: E402
 from uncle.server import App  # noqa: E402
 
@@ -308,6 +308,54 @@ class GatewayTests(unittest.TestCase):
         self.assertIsNone(gateway.parse_gateway_list(doc, ["pinecone"]))
 
 
+class VoiceTests(unittest.TestCase):
+    def test_deepgram_speak_request(self):
+        seen = {}
+
+        def fake(method, url, body=None, headers=None, timeout=60, retries=2):
+            seen.update(method=method, url=url, body=body, headers=headers)
+            return b"ID3" + b"\0" * 2000
+        old, os.environ["DEEPGRAM_API_KEY"] = voice.net.request, "dg-test"
+        voice.net.request = fake
+        try:
+            audio = voice.Deepgram().synth("Well hello.")
+        finally:
+            voice.net.request = old
+            del os.environ["DEEPGRAM_API_KEY"]
+        self.assertTrue(audio.startswith(b"ID3"))
+        self.assertEqual(seen["url"], "https://api.deepgram.com/v1/speak?model=aura-2-atlas-en&encoding=mp3")
+        self.assertEqual(seen["headers"]["Authorization"], "Token dg-test")
+        self.assertEqual(seen["body"], {"text": "Well hello."})
+
+    def test_what_gets_read_out(self):
+        self.assertEqual(voice.speakable("Dear ███ ███,\n\n\n\nWell   hello."), "Dear ,\n\nWell hello.")
+        long = "Doug took my glasses. " * 200
+        out = voice.speakable(long)
+        self.assertLessEqual(len(out), voice.MAX_CHARS)
+        self.assertTrue(out.endswith("glasses."))
+
+    def test_each_letter_is_recorded_once_and_there_is_a_daily_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            speaker = voice.MockSpeaker()
+            v = voice.Voice(tmp, speaker, per_day=1)
+            first = v.audio("Well hello there, friend.")
+            self.assertEqual(v.audio("Well hello there, friend."), first)
+            self.assertEqual(speaker.calls, 1)
+            self.assertIsNone(v.audio("A different letter altogether."))  # over today's limit
+            self.assertEqual(speaker.calls, 1)
+
+    def test_no_connector_means_the_browser_reads_it(self):
+        old = voice.gateway.resolve
+
+        def missing(name):
+            raise RuntimeError("No Sprites connector found for deepgram")
+        voice.gateway.resolve = missing
+        try:
+            self.assertFalse(voice.Deepgram().available())
+        finally:
+            voice.gateway.resolve = old
+
+
 class ProviderTests(unittest.TestCase):
     """No TypeSafe credits: Clef on the Ollama key decides, and letters fall back across models."""
 
@@ -516,6 +564,27 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0]["to"], "claims.desk@barrister-office.example")
         return self.app.store.thread(t["id"]), sent[0]
+
+    def test_uncle_reads_only_his_own_letters_aloud(self):
+        # Before the boss says yes, the letter isn't on the page, so there's nothing to hear.
+        mid, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.eng.handle(mid)
+        pending = self.app.store.q("SELECT id FROM letters")
+        self.assertTrue(all(self.app.letter_audio(l["id"]) is None for l in pending))
+        self.tmp.cleanup()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.app = make_app(self.tmp.name)
+        self.mail, self.eng = self.app.mail, self.app.engine
+        t, _ = self.forward_and_approve()
+        mine = self.app.store.q("SELECT id FROM letters WHERE direction='uncle'")[0]["id"]
+        self.assertIn(f'data-voice="/voice/letter/{mine}.mp3"', self.app.thread_html(t["id"]))
+        self.assertTrue(self.app.letter_audio(mine).startswith(b"ID3"))
+        self.assertIsNone(self.app.letter_audio(mine + 999))
+        # The try box: a link for the letter Uncle just wrote, and nothing for text he didn't.
+        j = self.app.with_voice(self.eng.try_uncle(GMAIL_FORWARD, "1.2.3.4"))
+        key = j["voice"].split("/")[-1][:-4]
+        self.assertEqual(self.app.voice.try_text(key), j["letter"])
+        self.assertIsNone(self.app.voice.try_text("0" * 32))
 
     def test_blocked_reply_falls_back_to_fresh_email_and_yes_still_works(self):
         def blocked(*_):
