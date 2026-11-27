@@ -201,6 +201,7 @@ class Store:
             "SELECT "
             " (SELECT COUNT(*) FROM threads WHERE approved_at IS NOT NULL) AS approached,"
             " (SELECT COUNT(*) FROM threads WHERE first_bite_at IS NOT NULL) AS bit,"
+            " (SELECT COUNT(*) FROM threads WHERE close_reason LIKE '%bounced%') AS bounced,"
             " (SELECT COUNT(*) FROM letters WHERE direction='scammer') AS scammer_letters,"
             " (SELECT COALESCE(SUM(words),0) FROM letters WHERE direction='scammer') AS scammer_words,"
             " (SELECT COUNT(*) FROM letters WHERE direction='uncle') AS uncle_letters,"

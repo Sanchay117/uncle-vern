@@ -177,7 +177,8 @@ h1 em{font-style:italic;color:var(--red);white-space:nowrap}
 .ledger div:last-child{border-right:0}
 .ledger .big{grid-column:1/-1;border-right:0;border-bottom:2px solid var(--ink);display:flex;align-items:baseline;
   flex-wrap:wrap;gap:4px 16px;padding:16px 16px 14px}
-.ledger .big b{font-size:46px;color:var(--red)}.ledger .big small{margin:0;font-size:12px}
+.ledger .big b{font-size:46px;color:var(--red);white-space:normal}.ledger .big small{margin:0;font-size:12px}
+.ledger.three{grid-template-columns:repeat(3,1fr)}
 .share{margin:14px 0 0;font:15px/1.5 system-ui,sans-serif;color:var(--soft)}
 .wakebox{margin:18px 0 6px}.wakes{display:block;width:100%;height:36px;color:var(--ink)}
 .ticks{display:flex;justify-content:space-between;font:13px system-ui,sans-serif;color:var(--soft);margin:4px 0 0}
@@ -187,7 +188,8 @@ h1 em{font-style:italic;color:var(--red);white-space:nowrap}
 .ledger small{display:block;margin-top:6px;font:11px/1.3 system-ui,sans-serif;color:var(--soft);text-transform:uppercase;letter-spacing:.07em}
 .odo{display:inline-flex;overflow:hidden;height:1.1em;line-height:1.1em}
 .odo .col{display:inline-flex;flex-direction:column;transition:transform 1.4s cubic-bezier(.2,.8,.2,1)}
-.odo .col span{height:1.1em}
+.odo .col::before{content:"0\\A 1\\A 2\\A 3\\A 4\\A 5\\A 6\\A 7\\A 8\\A 9";white-space:pre;display:block}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .odo .sep{display:inline-block}
 .foot-note{font:13px/1.45 system-ui,sans-serif;color:var(--soft);margin:6px 0 0;max-width:62em}
 
@@ -274,6 +276,7 @@ footer b{color:var(--ink)}
   .ledger div:nth-child(n+2):nth-child(-n+4){border-bottom:1px dashed var(--line)}.steps{grid-template-columns:1fr}}
 @media (max-width:560px){body{font-size:16px}.lede{font-size:18px}.ledger{grid-template-columns:repeat(2,1fr)}
   .ledger div{border-right:0!important;border-bottom:1px dashed var(--line)}.ledger b{font-size:25px}
+  .ledger .big b{font-size:32px}.ledger.three div{padding:12px 10px 10px}
   .diary li{grid-template-columns:1fr;gap:2px}.conv .u,.conv .s{margin:0}.sticky{width:170px;font-size:22px}
   .paper.notepad{padding-left:52px;background:linear-gradient(90deg,transparent 36px,var(--margin) 36px 37.5px,transparent 37.5px),
   repeating-linear-gradient(var(--paper) 0 27px,var(--rule) 27px 28px);background-color:var(--paper);background-position:0 0,0 -7px}}
@@ -453,12 +456,30 @@ or he was looked in on. Awake {esc(dur(awake)) if awake else "0 s"} in all, over
 READ_WPM, WRITE_WPM = 200, 25
 
 
-def wasted_tile(wasted, totals):
+def wasted_tile(wasted, waiting=0):
     if wasted:
         return f'<div class="big"><b>{esc(dur(wasted))}</b><small>Scammer time wasted (est.)</small></div>'
-    n = totals.get("uncle_letters") or 0
-    return (f'<div class="big"><b>{n} letter{"" if n == 1 else "s"} in the mail</b><small>Waiting on the first '
-            'scammer to write back. The time-wasted clock starts then.</small></div>')
+    return (f'<div class="big"><b>{waiting} scammer{" has" if waiting == 1 else "s have"} his letter</b><small>None '
+            'has written back yet. After a day of quiet he sends one short "did it reach you?", and the '
+            'time-wasted clock starts with the first reply.</small></div>')
+
+
+def ledger(totals, wasted, waiting):
+    """The scoreboard. Until a scammer writes back, only the numbers that aren't zero by definition."""
+    if totals.get("bit"):
+        hook = dur(totals["longest_hook_s"]) if totals["longest_hook_s"] else "-"
+        tiles = [(odo(totals['approached']), "Scammers written to"), (odo(totals['bit']), "Wrote back"),
+                 (odo(totals['uncle_letters']), "Letters from Uncle"),
+                 (odo(totals['scammer_letters']), "Letters from scammers"),
+                 (odo(totals['scammer_words']), "Words scammers typed"), (esc(hook), "Longest on the hook")]
+        cls = "ledger"
+    else:
+        tiles = [(odo(totals['approached']), "Scammers written to"),
+                 (odo(totals['uncle_letters']), "Letters from Uncle"),
+                 (odo(totals.get('bounced') or 0), "Addresses already shut down")]
+        cls = "ledger three"
+    cells = "".join(f"<div><b>{v}</b><small>{label}</small></div>" for v, label in tiles)
+    return f'<div class="{cls}">\n{wasted_tile(wasted, waiting)}\n{cells}\n</div>'
 
 
 def wasted_seconds(totals):
@@ -570,9 +591,9 @@ def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, lat
     diary_html = "".join(
         f'<li><time>{esc(ago(d["at"]))}</time><span>{esc(d["text"])}</span></li>' for d in diary) or \
         '<li><time></time><span>Nothing yet.</span></li>'
-    hook = dur(totals["longest_hook_s"]) if totals["longest_hook_s"] else "-"
     wasted = wasted_seconds(totals)
-    mem = f", {esc(memory_name)} (his memory for scam scripts)" if memory_name else ""
+    waiting = sum(1 for t in threads if t['status'] == 'active')
+    mem =f", {esc(memory_name)} (his memory for scam scripts)" if memory_name else ""
     body = f"""{header(meter)}
 <section class="hero"><div>
 <h1>Uncle Vern answers scam emails. <em>All of them.</em> <em>At length.</em></h1>
@@ -580,17 +601,9 @@ def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, lat
 Western Union is nearest the Piggly Wiggly. <b>Every hour a scammer spends on Uncle is an hour they don't spend
 on someone's grandma.</b></p>
 <div class="ctas"><a class="btn" href="#try">Try him on a scam</a><a class="btn ghost" href="#mailbag">Read the mailbag</a></div>
-</div>{desk(latest_scam, sum(1 for t in threads if t['status'] == 'active'))}</section>
+</div>{desk(latest_scam, waiting)}</section>
 
-<div class="ledger">
-{wasted_tile(wasted, totals)}
-<div><b>{odo(totals['approached'])}</b><small>Scammers written to</small></div>
-<div><b>{odo(totals['bit'])}</b><small>Wrote back</small></div>
-<div><b>{odo(totals['uncle_letters'])}</b><small>Letters from Uncle</small></div>
-<div><b>{odo(totals['scammer_letters'])}</b><small>Letters from scammers</small></div>
-<div><b>{odo(totals['scammer_words'])}</b><small>Words scammers typed</small></div>
-<div><b>{esc(hook)}</b><small>Longest on the hook</small></div>
-</div>
+{ledger(totals, wasted, waiting)}
 <p class="foot-note">Uncle has been awake {esc(dur(meter.get('awake_s', 0)))} in total, over {num(meter.get('wakes'))}
 wake-ups. The rest of the time he's asleep on a Fly.io Sprite, and the next letter wakes him. Time wasted is an
 estimate: his
@@ -733,12 +746,14 @@ ODO_JS = r"""
     for (var i = 0; i < txt.length; i++){
       var ch = txt[i];
       if (ch < '0' || ch > '9'){ var s = document.createElement('span'); s.className='sep'; s.textContent = ch; wrap.appendChild(s); continue; }
+      // The reel's digits are drawn by CSS, so the page's text (and a screen reader) reads the real number.
       var col = document.createElement('span'); col.className = 'col';
-      for (var d = 0; d <= 9; d++){ var c = document.createElement('span'); c.textContent = d; col.appendChild(c); }
       col.style.transitionDelay = (i * 90) + 'ms';
       wrap.appendChild(col); cols.push([col, +ch]);
     }
-    el.textContent = ''; el.appendChild(wrap);
+    wrap.setAttribute('aria-hidden', 'true');
+    var sr = document.createElement('span'); sr.className = 'sr'; sr.textContent = txt;
+    el.textContent = ''; el.appendChild(sr); el.appendChild(wrap);
     requestAnimationFrame(function(){ requestAnimationFrame(function(){
       cols.forEach(function(p){ p[0].style.transform = 'translateY(' + (-p[1] * 1.1) + 'em)'; });
     }); });
@@ -802,25 +817,22 @@ TRY_JS = r"""
   function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var near = 'qwertyuiopasdfghjklzxcvbnm';
-  // Hunt-and-peck, with the odd typo he goes back to fix, but done in about eight seconds.
+  // Hunt-and-peck, with the odd typo he goes back to fix. Paced by the clock, not by timer ticks, so a
+  // letter always takes about four seconds, even in a tab the browser is slowing down. A click finishes it.
   function type(el, text, done){
     if (reduce){ el.textContent = text; return done && done(); }
-    var i = 0, buf = '', skip = false, k = Math.max(1, Math.round(text.length / 450));
+    var start = Date.now(), total = Math.min(4500, 1000 + text.length * 4), skip = false, typo = 0, wrong = '';
     el.classList.add('typing');
     el.title = 'Click to let Uncle finish';
     el.parentNode.addEventListener('click', function(){ skip = true; }, {once: true});
     (function step(){
-      if (skip){ i = text.length; buf = text; el.textContent = text; }
-      if (i >= text.length){ el.classList.remove('typing'); el.title = ''; return done && done(); }
-      var ch = text[i];
-      if (/[a-z]/.test(ch) && Math.random() < 0.012){
-        var wrong = near[(near.indexOf(ch) + 1) % near.length];
-        el.textContent = buf + wrong;
-        return setTimeout(function(){ el.textContent = buf; setTimeout(step, 60); }, 140);
-      }
-      var piece = text.slice(i, i + k); buf += piece; i += piece.length; el.textContent = buf;
-      var pause = /[.!?]/.test(piece) ? 70 : /\n/.test(piece) ? 40 : 8 + Math.random() * 8;
-      setTimeout(step, pause);
+      var t = Date.now() - start;
+      if (skip || t >= total){ el.textContent = text; el.classList.remove('typing'); el.title = ''; return done && done(); }
+      var shown = Math.floor(text.length * t / total), ch = text[shown] || '';
+      if (!typo && /[a-z]/.test(ch) && Math.random() < 0.02){ typo = Date.now() + 160; wrong = near[(near.indexOf(ch) + 1) % near.length]; }
+      if (typo && Date.now() > typo) typo = 0;
+      el.textContent = text.slice(0, shown) + (typo ? wrong : '');
+      setTimeout(step, 24);
     })();
   }
   var convo = null, n = 0;

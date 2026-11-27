@@ -165,7 +165,7 @@ class App:
             if open_:
                 t = max(open_, key=lambda t: t["approved_at"] or 0)
                 latest = {"public_body": web.original_scam(t), "sent_at": t["approved_at"],
-                          "label": "On his desk · Uncle wrote back"}
+                          "label": "A real scam he's answering"}
         return web.home(self.cfg, self.store.totals(), self.meter_stats(), threads, letters,
                         self.store.diary(25), gateway.keys_on_box(), latest_scam=latest,
                         wakes=self.store.q("SELECT started_at, last_seen FROM boots WHERE last_seen>=?",

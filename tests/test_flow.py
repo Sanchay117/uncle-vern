@@ -120,6 +120,10 @@ class PersonaTests(unittest.TestCase):
         self.assertIn("claims to have sent money", persona.check_letter(ok + " I have sent the money."))
         self.assertIn("breaks character or mentions police", persona.check_letter(ok + " As an AI I cannot."))
         self.assertEqual(persona.check_letter(ok + " back in 1987 the Buick ran fine"), [])
+        # One nephew, always Dale: the judge caught a Kyle and a Randy in older letters.
+        self.assertEqual(persona.check_letter(ok + " My nephew Dale set this up."), [])
+        self.assertTrue(persona.check_letter(ok + " My nephew Kyle set this up."))
+        self.assertTrue(persona.check_letter(ok + " My niece Randi says hello."))
 
     def test_fallback_passes_own_check(self):
         self.assertEqual(persona.check_letter(persona.FALLBACK), [])
@@ -809,13 +813,17 @@ class FlowTests(unittest.TestCase):
 
     def test_judge_test_fixes_on_the_pages(self):
         home = self.app.home_html()
-        self.assertIn("0 letters in the mail", home)
+        self.assertIn("0 scammers have his letter", home)
         self.assertIn('id="sample"', home)
         self.assertLess(home.index('id="try"'), home.index('id="mailbag"'))
         t, sent = self.forward_and_approve()
         home = self.app.home_html()
-        self.assertIn("1 letter in the mail", home)
-        self.assertIn("On his desk", home)  # the real scam he's answering, not an empty in-tray
+        self.assertIn("1 scammer has his letter", home)
+        self.assertIn("A real scam he", home)  # the real scam on his desk, not an empty in-tray
+        # Until someone writes back, the scoreboard shows no columns that are zero by definition.
+        self.assertIn('class="ledger three"', home)
+        self.assertNotIn("Words scammers typed", home)
+        self.assertIn("Addresses already shut down", home)
         self.assertNotIn("claims.desk@barrister-office.example", home)
         page = self.app.thread_html(t["id"])
         self.assertIn("The scam that started it", page)

@@ -54,8 +54,11 @@ for someone keen and easy, so make them want to write back:
 - One sentence: Dale passed it along, and you're the one with time to see about it.
 - Say plainly that you'd like to go ahead, and that you've got a little put by from 41 years with the county
   (never a dollar amount).
-- One small, warm detail from your life, a sentence at most. Save the long stories for later letters.
-- End with one simple question about the very first step.
+- One small, funny, specific detail from your life, a sentence at most: Doug hiding something, the Buick
+  not starting, pie at the Piggly Wiggly, or Darlene and the birdbath, whichever fits. Save the long stories
+  for later letters.
+- End with one simple, slightly odd question about the very first step (whether they take a check, which
+  counter to go to, whether Dale ought to drive you).
 
 Their email (subject: {subject}):
 ---
@@ -188,7 +191,12 @@ def check_letter(text):
         problems.append("claims to have sent money")
     if any(re.search(r"\b" + re.escape(w) + r"\b", text, re.I) for w in redact.owner_words()):
         problems.append("names the person the email was really sent to")
+    if any(m.group(1) != "Dale" for m in RELATIVE_RE.finditer(text)):
+        problems.append("gives Uncle a relative he doesn't have (his only nephew is Dale)")
     return problems
+
+
+RELATIVE_RE = re.compile(r"\b(?:nephew|niece)\s+([A-Z][a-z]+)")
 
 
 def tidy(text):
