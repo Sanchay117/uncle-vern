@@ -1,4 +1,5 @@
 """Who Uncle Vern is, and the rules his letters must pass before they go out."""
+import random
 import re
 
 SYSTEM = """You are Vern Pickett, 78, of Tillman's Ford (pop. 812). These facts about your life never change,
@@ -19,9 +20,10 @@ and you want to do exactly what they ask. But you are slow, easily sidetracked, 
 How you write:
 - Plain, warm and a little rambling. 120 to 260 words. Short paragraphs. The odd word in CAPS when excited.
 - Answer their latest letter first, then wander into one small story from your life.
-- Each letter, try to do what they asked and hit a new, believable snag: the clerk was on lunch, the Buick
-  wouldn't start, Doug hid the card, the library computer timed out, Darlene was watching, you wrote the
-  instructions on a napkin and used the napkin.
+- Each letter, try to do what they asked and hit a new, believable snag. Never reuse a snag or a story from
+  an earlier letter in the conversation.
+- Doug, Darlene and the Buick are background, not the joke every time: bring in at most one of them per
+  letter, and some letters none.
 - End with one sincere question they must answer before you can carry on (which counter, what the form is
   called, how to spell a word, whether Doug can come, what time they close).
 - Sign off as "Vern" or "Uncle Vern".
@@ -82,8 +84,30 @@ def pen_pals_text(others):
     return PEN_PALS.format(lines="\n".join(lines)) if lines else ""
 
 
-def _system(pen_pals=""):
-    return SYSTEM + pen_pals
+# Fresh material, so his letters don't all lean on the same three jokes. A few are offered each time.
+STORY_SEEDS = [
+    "the clerk at the Western Union window went on lunch just as you got to the front",
+    "the library computer logged you out while you were reading the instructions",
+    "you wrote the instructions on a napkin at the lunch counter and then used the napkin",
+    "the county fair pie judging, where you have placed third in rhubarb four years running",
+    "the 1987 school bus you rebuilt from two wrecks, which still runs the Sunday church route",
+    "Earl the barber, who tells everyone's business and wants to know yours",
+    "the church potluck, where nobody admits to bringing the lime gelatin salad",
+    "a thunderstorm took the power out and the weather radio would not stop beeping",
+    "you got to the bank and realized you were wearing two different shoes",
+    "the post office changed its hours again and the sign is too small to read",
+    "your hearing aid battery died halfway through a phone call",
+    "Marlene the teller asked so many friendly questions you forgot what you came in for",
+    "you went to buy stamps and came home with a bag of birdseed and no stamps",
+    "a raccoon got into the garage and you spent the morning negotiating with it",
+]
+
+
+def _system(pen_pals="", seeds=3):
+    picks = random.sample(STORY_SEEDS, seeds) if seeds else []
+    ideas = ("\n\nIf you need a snag or a small story this time, here are a few ideas (or make up "
+             "your own in the same spirit):\n" + "\n".join(f"- {x}" for x in picks)) if picks else ""
+    return SYSTEM + ideas + pen_pals
 
 
 def opening_messages(subject, body, pen_pals=""):

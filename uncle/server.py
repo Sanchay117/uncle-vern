@@ -144,6 +144,13 @@ class App:
         letters = {t["id"]: self._letters(t) for t in threads}
         theirs = [l for ls in letters.values() for l in ls if l["direction"] == "scammer" and l["public_body"]]
         latest = max(theirs, key=lambda l: l["sent_at"] or 0) if theirs else None
+        if latest is None:
+            # No reply yet: put the newest real scam Uncle is answering on the desk, not an empty tray.
+            open_ = [t for t in threads if t["scam_text"]]
+            if open_:
+                t = max(open_, key=lambda t: t["approved_at"] or 0)
+                latest = {"public_body": web.original_scam(t), "sent_at": t["approved_at"],
+                          "label": "On his desk · Uncle wrote back"}
         return web.home(self.cfg, self.store.totals(), self.meter_stats(), threads, letters,
                         self.store.diary(25), gateway.keys_on_box(), latest_scam=latest,
                         wakes=self.store.q("SELECT started_at, last_seen FROM boots WHERE last_seen>=?",
@@ -239,6 +246,13 @@ def make_handler(app):
                     if mid:
                         app.jobs.put(("message", mid))
                 return self._json(200, {"ok": True})
+            if path == "/api/try/reply":
+                try:
+                    return self._json(200, app.engine.try_reply(data.get("scam"), data.get("turns"),
+                                                                data.get("reply"), self._ip()))
+                except Exception as exc:  # noqa: BLE001
+                    app.store.note(f"Try reply error: {exc}", kind="error", public=False)
+                    return self._json(200, {"error": "Uncle dropped the phone. Try again in a minute."})
             if path == "/api/try":
                 try:
                     return self._json(200, app.engine.try_uncle(data.get("text", ""), self._ip()))

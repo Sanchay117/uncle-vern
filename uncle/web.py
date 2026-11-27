@@ -11,7 +11,7 @@ import time
 import urllib.parse
 
 from . import redact
-from .engine import FRUSTRATION, jev_of
+from .engine import ASK_WORDS, FRUSTRATION, jev_of
 
 
 def esc(s):
@@ -92,11 +92,7 @@ def connectors_line():
     return ", ".join(parts)
 
 
-WANTS = {
-    "money_transfer": "wire money", "gift_cards": "buy gift cards", "crypto": "send crypto", "fee": "pay a fee",
-    "personal_details": "hand over his details", "move_chat": "move to WhatsApp or a call",
-    "click_or_install": "click a link", "nothing_yet": "keep talking (no ask yet)",
-}
+WANTS = ASK_WORDS
 
 
 def _svg_uri(svg):
@@ -196,7 +192,10 @@ h1 em{font-style:italic;color:var(--red);white-space:nowrap}
 .foot-note{font:13px/1.45 system-ui,sans-serif;color:var(--soft);margin:6px 0 0;max-width:62em}
 
 h2{font-size:30px;margin:54px 0 16px}
-h2 small{font:13px/1 system-ui,sans-serif;color:var(--soft);margin-left:10px;letter-spacing:.02em}
+h2 small{font:13px/1.3 system-ui,sans-serif;color:var(--soft);margin-left:10px;letter-spacing:.02em}
+@media (max-width:560px){h2 small{display:block;margin:6px 0 0}}
+.replybox{margin-top:16px}.replybox textarea{min-height:110px}
+.read{font:13px/1.5 system-ui,sans-serif;color:var(--soft);margin:12px 0 0}
 
 /* mailbag */
 .bag{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px}
@@ -226,7 +225,7 @@ h2 small{font:13px/1 system-ui,sans-serif;color:var(--soft);margin-left:10px;let
 .try textarea:focus{outline:2px solid var(--blue);outline-offset:3px}
 .typing::after{content:"\\258d";animation:blink 1s steps(1) infinite;color:var(--ink);margin-left:1px}
 @keyframes blink{50%{opacity:0}}
-.out .paper{min-height:250px}
+.out .paper{min-height:250px}.out .paper.office{min-height:0;padding:18px 22px}
 .wait{font:24px/1.2 "Caveat",cursive;color:var(--soft);padding:20px 0}
 
 /* how + rules */
@@ -447,6 +446,14 @@ or he was looked in on. Awake {esc(dur(awake)) if awake else "0 s"} in all, over
 READ_WPM, WRITE_WPM = 200, 25
 
 
+def wasted_tile(wasted, totals):
+    if wasted:
+        return f'<div class="big"><b>{esc(dur(wasted))}</b><small>Scammer time wasted (est.)</small></div>'
+    n = totals.get("uncle_letters") or 0
+    return (f'<div class="big"><b>{n} letter{"" if n == 1 else "s"} in the mail</b><small>Waiting on the first '
+            'scammer to write back. The time-wasted clock starts then.</small></div>')
+
+
 def wasted_seconds(totals):
     """A scammer's time spent on Uncle: reading his letters (only where they wrote back, so we know they
     read them) at READ_WPM, plus writing their own at WRITE_WPM, a typical pace for composing an email."""
@@ -537,7 +544,7 @@ def by_mail(cfg):
 def desk(latest_scam, letters_out=0):
     """Hero still life: the newest real scammer letter under Uncle's sticky note."""
     if latest_scam:
-        sheet = (f'<div class="paper office sheet"><div class="head"><span>Received</span><span>{esc(ago(latest_scam["sent_at"]))}</span></div>'
+        sheet = (f'<div class="paper office sheet"><div class="head"><span>{esc(latest_scam.get("label") or "Received")}</span><span>{esc(ago(latest_scam["sent_at"]))}</span></div>'
                  f'<div class="body">{letter_body(latest_scam["public_body"][:520])}</div></div>')
     else:
         waiting = (f"{letters_out} {'letter is' if letters_out == 1 else 'letters are'} in the mail. I check "
@@ -567,7 +574,7 @@ on someone's grandma.</b></p>
 </div>{desk(latest_scam, sum(1 for t in threads if t['status'] == 'active'))}</section>
 
 <div class="ledger">
-<div class="big"><b>{esc(dur(wasted) if wasted else "0 min")}</b><small>Scammer time wasted (est.)</small></div>
+{wasted_tile(wasted, totals)}
 <div><b>{odo(totals['approached'])}</b><small>Scammers written to</small></div>
 <div><b>{odo(totals['bit'])}</b><small>Wrote back</small></div>
 <div><b>{odo(totals['uncle_letters'])}</b><small>Letters from Uncle</small></div>
@@ -582,17 +589,18 @@ letters in conversations where the scammer wrote back, read at {READ_WPM} words 
 typed, at {WRITE_WPM} a minute.</p>
 {wake_strip(wakes, time.time())}
 
-<h2 id="mailbag">The mailbag <small>scammers' addresses, numbers, links and names are blacked out</small></h2>
-<div class="bag">{cards}</div>
-
 <h2 id="try">Try him <small>practice only: nothing is sent to anyone</small></h2>
 <div class="try">
 <form id="tryform"><textarea name="text" aria-label="A scam email" required
 placeholder="Paste a scam email here.&#10;&#10;Dear Beloved, I am Barrister ... you have been selected as next of kin to receive the sum of ..."></textarea>
-<p><button class="btn" type="submit">Ask Uncle to write back</button></p></form>
+<p><button class="btn" type="submit">Ask Uncle to write back</button>
+<button class="btn ghost" type="button" id="sample">Use a sample scam</button></p></form>
 <div class="out" id="out"><div class="wait">Uncle's letter will appear here.</div></div>
 </div>
 {by_mail(cfg)}
+
+<h2 id="mailbag">The mailbag <small>scammers' addresses, numbers, links and names are blacked out</small></h2>
+<div class="bag">{cards}</div>
 
 <h2>How it works</h2>
 <div class="steps">
@@ -621,12 +629,22 @@ whole country. Uncle Vern is your own. · <a href="{esc(cfg.code_url)}">Code</a>
     return page("Uncle Vern answers scam emails", body, image=card, url=cfg.public_url + "/")
 
 
+def original_scam(t):
+    """The scam the boss forwarded, redacted like every scammer letter."""
+    return redact.redact(t.get("scam_text") or "", names=[t["scammer_name"]] if t.get("scammer_name") else [])
+
+
 def thread_page(cfg, meter, t, letters, diary, card=None):
     parts = []
+    if t.get("scam_text") and not (letters and letters[0]["direction"] == "scammer"):
+        stamp = f'<div class="stampmark">{postmark(round((t["scam_prob"] or 0) * 100), "SCAM", dn().upper(), 70)}</div>'
+        parts.append(f'<div class="s"><p class="from">The scam that started it · forwarded by the boss</p>'
+                     f'<div class="paper office">{stamp}<div class="head"><span>Received · redacted copy</span></div>'
+                     f'<div class="body">{letter_body(original_scam(t)[:3000])}</div></div></div>')
     for l in letters:
         if l["direction"] == "uncle":
             parts.append(f'<div class="u"><p class="from">Uncle Vern wrote · {esc(ago(l["sent_at"]))}</p>'
-                         f'<div class="paper notepad"><div class="body">{esc(l["public_body"])}</div></div></div>')
+                         f'<div class="paper notepad"><div class="body">{letter_body(l["public_body"])}</div></div></div>')
         else:
             j = jev_of(l)
             stamp = ""
@@ -648,6 +666,7 @@ def thread_page(cfg, meter, t, letters, diary, card=None):
 <div class="thread-head"><div class="tag" style="margin:0">{esc(SCAM_LABEL.get(t['scam_type'], 'Scam'))} ·
 {dn()} {round((t['scam_prob'] or 0) * 100)}% scam · {esc(status)}</div>
 <h1>{esc(redact.subject(t['scam_subject']) or 'A letter')}</h1>
+<p class="meta">The subject line, as the scammer wrote it.</p>
 {frustration_meter(t['frustration']) if t['first_bite_at'] else ''}{share_bar(cfg, t, card)}</div>
 <div class="conv">{''.join(parts)}</div>
 <h2>Uncle's diary for this one</h2><ul class="diary">{diary_html}</ul>
@@ -688,12 +707,19 @@ ODO_JS = r"""
 TRY_JS = r"""
 (function(){
   var f = document.getElementById('tryform'), out = document.getElementById('out');
+  var SAMPLE = "Subject: URGENT: Unclaimed Inheritance Fund\n\nDear Beloved,\n\nI am Barrister James Okoro, " +
+    "personal attorney to the late Mr. Henry, who died with his family in a car accident. You have been " +
+    "identified as his next of kin to receive the sum of USD 4,500,000 in his estate.\n\nKindly reply with " +
+    "your full name, phone number and bank details so the processing fee of USD 250 can be arranged and " +
+    "the funds released to you. This is urgent and confidential.\n\nRegards,\nBarrister James Okoro";
+  document.getElementById('sample').addEventListener('click', function(){ f.text.value = SAMPLE; f.text.focus(); });
   function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var near = 'qwertyuiopasdfghjklzxcvbnm';
+  // Hunt-and-peck, with the odd typo he goes back to fix, but done in about eight seconds.
   function type(el, text, done){
     if (reduce){ el.textContent = text; return done && done(); }
-    var i = 0, buf = '', skip = false;
+    var i = 0, buf = '', skip = false, k = Math.max(1, Math.round(text.length / 450));
     el.classList.add('typing');
     el.title = 'Click to let Uncle finish';
     el.parentNode.addEventListener('click', function(){ skip = true; }, {once: true});
@@ -701,29 +727,67 @@ TRY_JS = r"""
       if (skip){ i = text.length; buf = text; el.textContent = text; }
       if (i >= text.length){ el.classList.remove('typing'); el.title = ''; return done && done(); }
       var ch = text[i];
-      if (/[a-z]/.test(ch) && Math.random() < 0.025){
+      if (/[a-z]/.test(ch) && Math.random() < 0.012){
         var wrong = near[(near.indexOf(ch) + 1) % near.length];
         el.textContent = buf + wrong;
-        return setTimeout(function(){ el.textContent = buf; setTimeout(step, 90); }, 200);
+        return setTimeout(function(){ el.textContent = buf; setTimeout(step, 60); }, 140);
       }
-      buf += ch; i++; el.textContent = buf;
-      var pause = /[.!?]/.test(ch) ? 150 : ch === '\n' ? 80 : ch === ',' ? 60 : 5 + Math.random() * 14;
+      var piece = text.slice(i, i + k); buf += piece; i += piece.length; el.textContent = buf;
+      var pause = /[.!?]/.test(piece) ? 70 : /\n/.test(piece) ? 40 : 8 + Math.random() * 8;
       setTimeout(step, pause);
     })();
   }
+  var convo = null, n = 0;
+  function uncleLetter(box, j, after){
+    var id = 'typed' + (++n);
+    box.insertAdjacentHTML('beforeend', '<p class="from" style="margin-top:18px">Uncle Vern wrote <span class="meta">(click to let him finish)</span></p>' +
+      '<div class="paper notepad"><div class="body" id="' + id + '"></div></div>');
+    type(document.getElementById(id), j.letter, after);
+  }
+  function replyBox(box){
+    if (!convo || convo.turns.length >= 7){
+      box.insertAdjacentHTML('beforeend', '<p class="read">That\'s as far as practice goes. A real scammer gets to keep going.</p>');
+      return;
+    }
+    box.insertAdjacentHTML('beforeend', '<div class="replybox"><p class="meta"><b>Now you be the scammer.</b> ' +
+      'Write back as them (push him, get cross, ask for the fee) and see how Uncle answers.</p>' +
+      '<textarea aria-label="Your reply as the scammer" placeholder="Dear Vern, you must send the fee TODAY by Western Union..."></textarea>' +
+      '<p><button class="btn" type="button">Send as the scammer</button></p></div>');
+    var rb = box.lastElementChild, ta = rb.querySelector('textarea'), btn = rb.querySelector('button');
+    btn.addEventListener('click', function(){
+      var reply = ta.value.trim();
+      if (reply.length < 5){ ta.focus(); return; }
+      btn.disabled = true; btn.textContent = 'Uncle is reading it...';
+      fetch('/api/try/reply', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({scam: convo.scam, turns: convo.turns, reply: reply})})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (j.error){ btn.disabled = false; btn.textContent = 'Send as the scammer'; rb.insertAdjacentHTML('beforeend', '<p class="read">' + esc(j.error) + '</p>'); return; }
+          rb.outerHTML = '<p class="from" style="margin-top:18px">You, as the scammer</p><div class="paper office"><div class="body">' + esc(reply) + '</div></div>' +
+            '<p class="read">' + esc(j.read) + '</p>';
+          convo.turns.push({who: 'scammer', text: reply});
+          if (!j.letter){ box.insertAdjacentHTML('beforeend', '<p class="read">' + esc(j.note) + '</p>'); return; }
+          convo.turns.push({who: 'uncle', text: j.letter});
+          uncleLetter(box, j, function(){ replyBox(box); });
+        })
+        .catch(function(){ btn.disabled = false; btn.textContent = 'Send as the scammer'; });
+    });
+  }
   f.addEventListener('submit', function(e){
     e.preventDefault();
-    var b = f.querySelector('button'); b.disabled = true; b.textContent = 'Uncle is finding his glasses...';
+    var b = f.querySelector('button[type=submit]'); b.disabled = true; b.textContent = 'Uncle is finding his glasses...';
     out.innerHTML = '<div class="wait">Uncle is reading it slowly, with his finger.</div>';
-    fetch('/api/try', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text: f.text.value})})
+    var scam = f.text.value;
+    fetch('/api/try', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text: scam})})
       .then(function(r){ return r.json(); })
       .then(function(j){
         if (j.error){ out.innerHTML = '<div class="wait">' + esc(j.error) + '</div>'; return; }
         var pct = Math.round(j.scam_prob * 100), kind = esc(String(j.scam_type).replace(/_/g, ' '));
         var h = '<p class="meta">' + esc(j.decider || 'Jev') + ' says ' + pct + '% scam (' + kind + ').</p>';
         if (!j.letter){ out.innerHTML = h + '<div class="wait">' + esc(j.note) + '</div>'; return; }
-        out.innerHTML = h + '<div class="paper notepad"><div class="body" id="typed"></div></div><p class="meta" id="note"></p>';
-        type(document.getElementById('typed'), j.letter, function(){ document.getElementById('note').textContent = j.note; });
+        out.innerHTML = h;
+        convo = {scam: scam, turns: [{who: 'uncle', text: j.letter}]};
+        uncleLetter(out, j, function(){ out.insertAdjacentHTML('beforeend', '<p class="meta">' + esc(j.note) + '</p>'); replyBox(out); });
       })
       .catch(function(){ out.innerHTML = '<div class="wait">Uncle dropped the phone. Try again.</div>'; })
       .then(function(){ b.disabled = false; b.textContent = 'Ask Uncle to write back'; });

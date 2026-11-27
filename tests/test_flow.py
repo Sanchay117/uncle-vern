@@ -577,6 +577,40 @@ class FlowTests(unittest.TestCase):
         self.eng.handle(forged)
         self.assertEqual(len(self.mail.outbox), 1)
 
+    def test_judge_test_fixes_on_the_pages(self):
+        home = self.app.home_html()
+        self.assertIn("0 letters in the mail", home)
+        self.assertIn('id="sample"', home)
+        self.assertLess(home.index('id="try"'), home.index('id="mailbag"'))
+        t, sent = self.forward_and_approve()
+        home = self.app.home_html()
+        self.assertIn("1 letter in the mail", home)
+        self.assertIn("On his desk", home)  # the real scam he's answering, not an empty in-tray
+        self.assertNotIn("claims.desk@barrister-office.example", home)
+        page = self.app.thread_html(t["id"])
+        self.assertIn("The scam that started it", page)
+        self.assertIn("next of kin", page)
+        for secret in ("claims.desk@barrister-office.example", "Okoro"):
+            self.assertNotIn(secret, page)
+        self.assertIn("as the scammer wrote it", page)
+
+    def test_play_the_scammer(self):
+        first = self.eng.try_uncle(GMAIL_FORWARD, "1.2.3.4")
+        self.assertTrue(first["letter"])
+        turns = [{"who": "uncle", "text": first["letter"]}]
+        r = self.eng.try_reply(GMAIL_FORWARD, turns, "Vern you must send the processing fee by Western Union "
+                               "today, urgent!", "1.2.3.4")
+        self.assertTrue(r["letter"])
+        self.assertIn("still hooked", r["read"])
+        self.assertIn("wants Uncle to", r["read"])
+        stop = self.eng.try_reply(GMAIL_FORWARD, turns, "Please stop emailing me, wrong person.", "1.2.3.4")
+        self.assertIsNone(stop["letter"])
+        self.assertIn("stops writing", stop["note"])
+        self.assertIn("error", self.eng.try_reply(GMAIL_FORWARD, [], "hello there", "1.2.3.4"))
+        self.assertEqual(self.mail.outbox, [])  # practice never sends mail
+        self.app.cfg.try_per_ip_hour = 3
+        self.assertIn("nap", self.eng.try_reply(GMAIL_FORWARD, turns, "Send it now!", "1.2.3.4")["error"])
+
     def test_stop_request_closes(self):
         t, sent = self.forward_and_approve()
         n_before = len(self.mail.outbox)

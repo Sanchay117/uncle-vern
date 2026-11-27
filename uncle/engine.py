@@ -4,6 +4,7 @@ Every decision is a Jev question with a number attached, and every action is
 written to Uncle's diary in plain words, so anyone can see why he did it.
 """
 import email.utils
+import concurrent.futures
 import hashlib
 import json
 import threading
@@ -45,6 +46,13 @@ def intake_questions():
         "scam_type": choice("What kind of email is this?", SCAM_TYPES),
     }
 
+
+# How the page says each ask, in plain words.
+ASK_WORDS = {
+    "money_transfer": "wire money", "gift_cards": "buy gift cards", "crypto": "send crypto", "fee": "pay a fee",
+    "personal_details": "hand over his details", "move_chat": "move to WhatsApp or a call",
+    "click_or_install": "click a link", "nothing_yet": "keep talking (no ask yet)",
+}
 
 ASKING_FOR = {
     "money_transfer": "Send money by wire, Western Union, MoneyGram or bank transfer",
@@ -299,21 +307,7 @@ class Engine:
         name, _ = addr_of(msg.get("from"))
         letters = self.store.letters(tid)
         last_uncle = next((l["body"] for l in reversed(letters) if l["direction"] == "uncle"), "")
-        a = self.jev.ask({"original_email": (thread["scam_text"] or "")[:2500],
-                          "uncle_last_letter": last_uncle[:3000], "their_reply": text[:5000]}, {
-            "is_scam": noul("Is the sender of their_reply still trying to get money, codes, details or access "
-                            "from Uncle under false pretenses?"),
-            "still_hooked": noul("Does the sender of their_reply want the conversation to continue?"),
-            "wants_stop": noul("Is the sender of their_reply asking to stop contact, saying they have the wrong "
-                               "person, or saying they want nothing from Uncle?"),
-            "asking_for": choice("What is the sender of their_reply mainly asking Uncle to do now?", ASKING_FOR),
-            "frustration": score("How frustrated with Uncle is the sender of their_reply?", FRUSTRATION),
-        })
-        p_scam = p_yes(a, "is_scam")
-        hooked = p_yes(a, "still_hooked")
-        stop = p_yes(a, "wants_stop")
-        ask, _ = picked(a, "asking_for", "nothing_yet")
-        fr = scored(a, "frustration")
+        p_scam, hooked, stop, ask, fr = self._read_reply(thread["scam_text"], last_uncle, text)
         now = time.time()
         first = thread["first_bite_at"] is None
         self.store.add_letter(tid, "scammer", msg["message_id"], text,
@@ -358,6 +352,22 @@ class Engine:
                              f"They bit! The scammer wrote back. Watch it unfold: {self.cfg.public_url}/t/{tid}"
                              "\n\nVern")
         return tid
+
+    def _read_reply(self, original, last_uncle, reply):
+        """What the decision model makes of a scammer's reply: (is_scam, still_hooked, wants_stop, asking_for,
+        frustration)."""
+        a = self.jev.ask({"original_email": (original or "")[:2500],
+                          "uncle_last_letter": (last_uncle or "")[:3000], "their_reply": (reply or "")[:5000]}, {
+            "is_scam": noul("Is the sender of their_reply still trying to get money, codes, details or access "
+                            "from Uncle under false pretenses?"),
+            "still_hooked": noul("Does the sender of their_reply want the conversation to continue?"),
+            "wants_stop": noul("Is the sender of their_reply asking to stop contact, saying they have the wrong "
+                               "person, or saying they want nothing from Uncle?"),
+            "asking_for": choice("What is the sender of their_reply mainly asking Uncle to do now?", ASKING_FOR),
+            "frustration": score("How frustrated with Uncle is the sender of their_reply?", FRUSTRATION),
+        })
+        ask, _ = picked(a, "asking_for", "nothing_yet")
+        return p_yes(a, "is_scam"), p_yes(a, "still_hooked"), p_yes(a, "wants_stop"), ask, scored(a, "frustration")
 
     def _pen_pals(self, exclude=None):
         """Uncle's other conversations, as gossip-safe (kind, how it stands) pairs for the letter prompt."""
@@ -536,35 +546,74 @@ class Engine:
         return f"sent; the boss's answer will arrive in thread {otid}" if otid else "failed again, see the diary"
 
     # ------------------------------------------------------------ the public "try Uncle" box
-    def try_uncle(self, text, ip):
-        text = (text or "").strip()
-        if len(text) < 30:
-            return {"error": "Paste a bit more of the scam, at least a sentence or two."}
-        if len(text) > 4000:
-            text = text[:4000]
+    def _try_slot(self, ip):
+        """Count one practice turn against the per-visitor and daily limits. Returns an error or None."""
         now = time.time()
         h = ip_hash(ip)
         mine = self.store.one("SELECT COUNT(*) n FROM tries WHERE ip_hash=? AND at>=?", (h, now - 3600))["n"]
         total = self.store.one("SELECT COUNT(*) n FROM tries WHERE at>=?", (now - DAY,))["n"]
         if mine >= self.cfg.try_per_ip_hour:
-            return {"error": "Uncle needs a nap. Try again in an hour."}
+            return "Uncle needs a nap. Try again in an hour."
         if total >= self.cfg.try_per_day:
-            return {"error": "Uncle has written all the practice letters he can today. Come back tomorrow."}
+            return "Uncle has written all the practice letters he can today. Come back tomorrow."
         self.store.run("INSERT INTO tries(ip_hash, at) VALUES(?,?)", (h, now))
-        a = self.jev.ask(text, {
-            "is_scam": noul("Is this email a scam or fraud attempt: trying to get money, gift cards, crypto, "
-                            "personal or banking details, or remote access from the reader under false pretenses?"),
-            "scam_type": choice("What kind of email is this?", SCAM_TYPES),
-        })
-        p = p_yes(a, "is_scam")
-        kind, _ = picked(a, "scam_type", "other")
-        if p < 0.5:
-            return {"scam_prob": p, "scam_type": kind, "decider": self.jev.name,
-                    "letter": None, "note": f"{self.jev.name} thinks this is only {pct(p)} likely to be a scam. Uncle only "
-                                            "writes to scammers, so he's sitting this one out."}
-        letter, _ = persona.write_letter(self.llm, persona.opening_messages("", text, pen_pals=self._pen_pals()))
+        return None
+
+    def try_uncle(self, text, ip):
+        text = (text or "").strip()
+        if len(text) < 30:
+            return {"error": "Paste a bit more of the scam, at least a sentence or two."}
+        text = text[:4000]
+        err = self._try_slot(ip)
+        if err:
+            return {"error": err}
+        # The decision and the letter at once, so a visitor waits for one model call, not two.
+        # A letter written for something that turns out not to be a scam is simply thrown away.
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:
+            decided = pool.submit(self.jev.ask, text, {
+                "is_scam": noul("Is this email a scam or fraud attempt: trying to get money, gift cards, crypto, "
+                                "personal or banking details, or remote access from the reader under false pretenses?"),
+                "scam_type": choice("What kind of email is this?", SCAM_TYPES),
+            })
+            written = pool.submit(persona.write_letter, self.llm,
+                                  persona.opening_messages("", text, pen_pals=self._pen_pals()))
+            a = decided.result()
+            p = p_yes(a, "is_scam")
+            kind, _ = picked(a, "scam_type", "other")
+            if p < 0.5:
+                written.cancel()
+                return {"scam_prob": p, "scam_type": kind, "decider": self.jev.name,
+                        "letter": None, "note": f"{self.jev.name} thinks this is only {pct(p)} likely to be a scam. "
+                                                "Uncle only writes to scammers, so he's sitting this one out."}
+            letter, _ = written.result()
         return {"scam_prob": p, "scam_type": kind, "decider": self.jev.name, "letter": letter,
                 "note": "A practice letter. Nothing was sent to anyone."}
+
+    def try_reply(self, scam, turns, reply, ip):
+        """Practice, round two: the visitor plays the scammer and Uncle answers, the same way he answers a
+        real one. Nothing is stored or sent."""
+        reply = (reply or "").strip()[:3000]
+        scam = (scam or "").strip()[:4000]
+        if len(reply) < 5 or len(scam) < 30:
+            return {"error": "Write Uncle a reply first."}
+        turns = [t for t in (turns or []) if isinstance(t, dict) and t.get("who") in ("uncle", "scammer")
+                 and isinstance(t.get("text"), str)][-8:]
+        if not turns or len(turns) >= 8:
+            return {"error": "That's as far as practice goes."}
+        err = self._try_slot(ip)
+        if err:
+            return {"error": err}
+        last_uncle = next((t["text"] for t in reversed(turns) if t["who"] == "uncle"), "")
+        p_scam, hooked, stop, ask, fr = self._read_reply(scam, last_uncle, reply)
+        read = (f"{self.jev.name} read your letter: {pct(p_scam)} still a scam, {pct(hooked)} still hooked, mood "
+                f"{fr:.1f} of 4, wants Uncle to {ASK_WORDS.get(ask, 'do something')}.")
+        if stop >= 0.6 or p_scam < 0.3:
+            why = "you asked him to stop" if stop >= 0.6 else "that no longer reads like a scam"
+            return {"read": read, "letter": None,
+                    "note": f"Uncle stops writing here, because {why}. He never pesters real people."}
+        history = [("scammer", scam)] + [(t["who"], t["text"][:4000]) for t in turns] + [("scammer", reply)]
+        letter, _ = persona.write_letter(self.llm, persona.reply_messages(history, ask, fr, pen_pals=self._pen_pals()))
+        return {"read": read, "letter": letter, "note": "Practice. Nothing was sent to anyone."}
 
 
 def jev_of(letter_row):
