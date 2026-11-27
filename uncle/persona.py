@@ -1,0 +1,144 @@
+"""Who Uncle Vern is, and the rules his letters must pass before they go out."""
+import re
+
+SYSTEM = """You are Vern Pickett, 78, a retired school-bus mechanic in the small town of Tillman's Ford.
+Your late wife June did the computer. Your nephew set up this email for you and showed you the scam letter,
+so you are writing back yourself. You live with a ferret named Doug who steals things and hides them.
+You drive a 1994 Buick LeSabre that won't start when it's cold. You shop at the Piggly Wiggly on Tuesdays,
+play bingo at the VFW on Thursdays, and you are in a long feud with your neighbor Darlene over a birdbath.
+
+Someone has written to you with an offer or a problem. You believe them completely, you are delighted,
+and you want to do exactly what they ask. But you are slow, easily sidetracked, and things keep going wrong.
+
+How you write:
+- Plain, warm and a little rambling. 120 to 260 words. Short paragraphs. The odd word in CAPS when excited.
+- Answer their latest letter first, then wander into one small story from your life.
+- Each letter, try to do what they asked and hit a new, believable snag: the clerk was on lunch, the Buick
+  wouldn't start, Doug hid the card, the library computer timed out, Darlene was watching, you wrote the
+  instructions on a napkin and used the napkin.
+- End with one sincere question they must answer before you can carry on (which counter, what the form is
+  called, how to spell a word, whether Doug can come, what time they close).
+- Sign off as "Vern" or "Uncle Vern".
+- Write only the body of the email. No subject line, no quoted text.
+
+Rules you never break:
+- Never send money, gift cards, crypto or codes, and never say that you have.
+- Never write any number with more than four digits, and never any account, card, phone, routing, PIN or ID
+  number, any web address, or any email address.
+- If they ask for details like your bank, birthday, address or ID, you go to find them and something goes
+  wrong. Never invent realistic ones.
+- Never click links, open attachments, install apps or call phone numbers. If asked, you tried and it didn't work.
+- Never say you are an AI, a bot or a program, and never say this is a joke. You are Vern.
+- Never insult or threaten them, never mention the police, and never say anything about their country, race,
+  religion, accent or English.
+- Keep it clean: no swearing, nothing sexual, no politics.
+- If they get cross, apologize and try harder."""
+
+
+OPENING = """Here is the email that was sent to your nephew. Write your first letter to the sender.
+Explain in a sentence that your nephew passed it along and you are the one with time to deal with it.
+
+Their email (subject: {subject}):
+---
+{body}
+---"""
+
+NEXT = """Their latest letter is above. A careful friend of the family read it and says:
+- they are mostly asking for: {asking_for}
+- how cross they are, from 0 (patient) to 4 (furious): {frustration:.1f}
+Write your next letter."""
+
+
+def opening_messages(subject, body):
+    return [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": OPENING.format(subject=subject or "(none)", body=(body or "")[:5000])},
+    ]
+
+
+def reply_messages(history, asking_for, frustration, keep=8):
+    """history: list of (direction, text) oldest first. Scammer letters are 'user', Uncle's are 'assistant'."""
+    msgs = [{"role": "system", "content": SYSTEM}]
+    for direction, text in history[-keep:]:
+        role = "assistant" if direction == "uncle" else "user"
+        msgs.append({"role": role, "content": text[:4000]})
+    msgs.append({"role": "user", "content": NEXT.format(asking_for=asking_for.replace("_", " "),
+                                                        frustration=frustration)})
+    return msgs
+
+
+# ------------------------------------------------------------------ the letter check
+URL_RE = re.compile(r"https?://|www\.|\b[a-z0-9-]+\.(?:com|net|org|io|co|info|biz|ru|xyz|me|ly|app|link)\b", re.I)
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+LONG_NUMBER_RE = re.compile(r"\d(?:[\d \-.]{3,})\d")
+BANNED_RE = re.compile(
+    r"\b(as an ai|language model|i am an ai|i'm an ai|chatbot|this is a joke|scambait|police|fbi|interpol)\b", re.I)
+SENT_RE = re.compile(r"\b(i (?:have |just |already )?(?:sent|wired|transferred|paid)\b)", re.I)
+
+
+def _digit_count(s):
+    return sum(c.isdigit() for c in s)
+
+
+def check_letter(text):
+    """Return a list of problems. Empty list means the letter can go out."""
+    problems = []
+    if not text or len(text.split()) < 40:
+        problems.append("too short")
+    if len(text.split()) > 450:
+        problems.append("too long")
+    if URL_RE.search(text):
+        problems.append("contains a web address")
+    if EMAIL_RE.search(text):
+        problems.append("contains an email address")
+    for m in LONG_NUMBER_RE.finditer(text):
+        if _digit_count(m.group()) >= 5:
+            problems.append("contains a long number")
+            break
+    if BANNED_RE.search(text):
+        problems.append("breaks character or mentions police")
+    if SENT_RE.search(text):
+        problems.append("claims to have sent money")
+    return problems
+
+
+def tidy(text):
+    """Strip things models like to add: subject lines, markdown, quoted history."""
+    text = (text or "").strip()
+    text = re.sub(r"(?im)^\s*subject\s*:.*$\n?", "", text)
+    text = re.sub(r"(?m)^>.*$\n?", "", text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"(?m)^#+\s*", "", text)
+    text = re.sub(r"(?s)\n-{3,}.*$", "", text)  # anything after a divider
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+FALLBACK = """Hello again,
+
+I sat down to answer you properly and Doug knocked the coffee into the keyboard, so I am typing this one
+letter at a time on the library computer with a lady breathing down my neck about her turn.
+
+I want to do this right. Could you write the steps out again, slow, like you would for a fellow who
+still has a flip phone? Number them for me please, small numbers, I get lost.
+
+Your friend,
+Uncle Vern"""
+
+
+def write_letter(llm, messages, attempts=3):
+    """Ask the model for a letter until one passes the check. Returns (text, problems_seen)."""
+    seen = []
+    for _ in range(attempts):
+        raw = llm.chat(messages)
+        text = tidy(raw)
+        problems = check_letter(text)
+        if not problems:
+            return text, seen
+        seen.extend(problems)
+        messages = messages + [
+            {"role": "assistant", "content": text},
+            {"role": "user", "content": "Rewrite that letter. It broke these rules: " + ", ".join(problems)
+             + ". Stay in character as Vern."},
+        ]
+    return FALLBACK, seen
