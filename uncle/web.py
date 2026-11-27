@@ -6,6 +6,7 @@ React Bits' Text Type, and the mechanical roll of netoun's split-flap board, her
 the odometer of Uncle's Buick.
 """
 import html
+import json
 import re
 import time
 import urllib.parse
@@ -203,6 +204,10 @@ text-decoration:underline;text-underline-offset:3px}
 .hear:hover{color:#000}
 .kin{font:14px/1.5 system-ui,sans-serif;background:#fff8d9;border-left:4px solid var(--ink);padding:10px 14px;
 margin:14px 0 0;max-width:62ch}
+.verdict{font:15px/1.5 system-ui,sans-serif;background:var(--paper);border:2px solid var(--red);padding:12px 16px;
+margin:16px 0 0;max-width:62ch}
+.verdict ul{margin:6px 0 0;padding-left:20px}.verdict li{margin:2px 0}.verdict p{margin:8px 0 0;color:var(--soft)}
+.verdict a{color:var(--ink)}
 .families{list-style:none;padding:0;margin:0;font:15px/1.6 system-ui,sans-serif}
 .families li{padding:10px 0;border-bottom:1px dashed rgba(0,0,0,.25)}
 
@@ -566,8 +571,9 @@ def by_mail(cfg):
         return ""
     return (f'<p class="bymail"><b>Or try him by email.</b> Forward a scam from your own inbox to '
             f'<a href="mailto:{esc(cfg.inbox)}">{esc(cfg.inbox)}</a>. The email wakes him up, and he mails you '
-            "the letter he'd send, usually within a minute. Nothing goes to the scammer unless his boss reads "
-            "it and says yes.</p>")
+            "back within a minute or two: why it's a scam, and the letter he'd send. Then reply to him as the "
+            f"scammer, and he keeps going, for up to {cfg.practice_rounds} rounds. Nothing goes to the real "
+            "scammer unless his boss reads it and says yes.</p>")
 
 
 def desk(latest_scam, letters_out=0):
@@ -585,7 +591,7 @@ def desk(latest_scam, letters_out=0):
 
 
 def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, latest_scam=None, wakes=(),
-         card=None, families=(), memory_name=None, voice_name=None):
+         card=None, families=(), memory_name=None, voice_name=None, web_name=None):
     cards = "".join(thread_card(t, letters_by_thread.get(t["id"], [])) for t in threads) or \
         '<div class="empty">No pen pals yet. Uncle is sitting by the mailbox.</div>'
     diary_html = "".join(
@@ -594,6 +600,7 @@ def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, lat
     wasted = wasted_seconds(totals)
     waiting = sum(1 for t in threads if t['status'] == 'active')
     mem = f", {esc(memory_name)} (his memory for scam scripts)" if memory_name else ""
+    mem += f", {esc(web_name)} (looks for copies of each scam on the web)" if web_name else ""
     mem += f", {esc(voice_name)} (reads his letters aloud)" if voice_name else ""
     body = f"""{header(meter)}
 <section class="hero"><div>
@@ -681,6 +688,39 @@ def kin_line(kin, memory_name):
             f'{more} When one mailbox gets shut down, the script just moves to a new one.</p>')
 
 
+def _loads(s):
+    try:
+        return json.loads(s) if s else None
+    except (TypeError, ValueError):
+        return None
+
+
+def verdict_box(t, web_name="Apify"):
+    """Why it's a scam, in plain words, and whether the same letter is already on the web."""
+    names = [t["scammer_name"]] if t.get("scammer_name") else []
+    flags = [redact.redact(str(f), names=names)[:200] for f in (_loads(t.get("flags")) or []) if str(f).strip()]
+    web = _loads(t.get("web")) or {}
+    if not flags and not web.get("at"):
+        return ""
+    out = [f'<div class="verdict"><b>Yes, it\'s a scam.</b> {dn()} puts it at {round((t.get("scam_prob") or 0) * 100)}%.']
+    if flags:
+        out.append(" The red flags:<ul>" + "".join(f"<li>{esc(f)}</li>" for f in flags[:4]) + "</ul>")
+    if web.get("at"):
+        found = web.get("found") or []
+        phrase = redact.redact(web.get("phrase") or "", names=names)
+        if found:
+            links = ", ".join(f'<a href="{esc(f["url"])}" target="_blank" rel="noopener nofollow">{esc(f["site"])}</a>'
+                              for f in found[:5] if str(f.get("url", "")).startswith("http"))
+            n = len(found)
+            out.append(f"<p>{esc(web_name)} searched the web for one sentence of it, &ldquo;{esc(phrase)}&rdquo;, and "
+                       f"found the same words on {n} other {'page' if n == 1 else 'pages'} where people post the "
+                       f"scams they get: {links}.</p>")
+        else:
+            out.append(f"<p>{esc(web_name)} searched the web for one sentence of it, &ldquo;{esc(phrase)}&rdquo;, "
+                       "and found no copies yet, so it may be a fresh one.</p>")
+    return "".join(out) + "</div>"
+
+
 def families_section(families, memory_name):
     if not families:
         return ""
@@ -691,13 +731,14 @@ def families_section(families, memory_name):
             f'<ul class="families">{items}</ul>')
 
 
-def thread_page(cfg, meter, t, letters, diary, card=None, kin=None, memory_name="Pinecone", voice_on=False):
+def thread_page(cfg, meter, t, letters, diary, card=None, kin=None, memory_name="Pinecone", voice_on=False,
+                web_name="Apify"):
     parts = []
     if t.get("scam_text") and not (letters and letters[0]["direction"] == "scammer"):
         stamp = f'<div class="stampmark">{postmark(round((t["scam_prob"] or 0) * 100), "SCAM", dn().upper(), 70)}</div>'
         parts.append(f'<div class="s"><p class="from">The scam that started it · forwarded by the boss</p>'
                      f'<div class="paper office">{stamp}<div class="head"><span>Received · redacted copy</span></div>'
-                     f'<div class="body">{letter_body(original_scam(t)[:3000])}</div></div></div>')
+                     f'<div class="body">{letter_body(original_scam(t)[:3000])}</div></div>{verdict_box(t, web_name)}</div>')
     for l in letters:
         if l["direction"] == "uncle":
             vo = f' data-voice="/voice/letter/{l["id"]}.mp3"' if voice_on and l.get("id") else ""
@@ -905,6 +946,10 @@ TRY_JS = r"""
         if (j.error){ out.innerHTML = '<div class="wait">' + esc(j.error) + '</div>'; return; }
         var pct = Math.round(j.scam_prob * 100), kind = esc(String(j.scam_type).replace(/_/g, ' '));
         var h = '<p class="meta">' + esc(j.decider || 'Jev') + ' says ' + pct + '% scam (' + kind + ').</p>';
+        if (j.letter && j.flags && j.flags.length){
+          h = '<div class="verdict"><b>Yes, it\'s a scam.</b> ' + esc(j.decider || 'Jev') + ' puts it at ' + pct + '% (' + kind + '). The red flags:<ul>' +
+            j.flags.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+        }
         if (!j.letter){ out.innerHTML = h + '<div class="wait">' + esc(j.note) + '</div>'; return; }
         out.innerHTML = h;
         convo = {scam: scam, turns: [{who: 'uncle', text: j.letter}]};

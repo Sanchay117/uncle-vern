@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from uncle import clients, gateway, intake, memory, meter, persona, redact, voice, web  # noqa: E402
+from uncle import clients, gateway, intake, memory, meter, persona, redact, voice, web, websearch  # noqa: E402
 from uncle.config import Config  # noqa: E402
 from uncle.server import App  # noqa: E402
 
@@ -269,6 +269,84 @@ class MemoryTests(unittest.TestCase):
             self.assertEqual(s.q("SELECT kin FROM threads"), [{"kin": None}])
 
 
+class WebSearchTests(unittest.TestCase):
+    SCAM = ("Dear Priya, I am Barrister James Okoro. Your late relative left an unclaimed fund that only you can "
+            "receive through our chambers this month. Call +234 801 234 5678 or write to claims@law.example today.")
+
+    def test_copies_need_six_words_in_a_row_one_page_per_site(self):
+        phrase = "left an unclaimed fund that only you can receive through our chambers"
+        results = [
+            {"url": "https://www.scamwarners.example/t/1", "title": "Inheritance scam",
+             "description": "Your late relative left an unclaimed fund that only you can receive..."},
+            {"url": "https://scamwarners.example/t/2", "title": "Same again", "description": phrase},
+            {"url": "https://blog.example/a", "title": "Funds", "description": "unclaimed fund that only you"},
+            # Whole words only: "yleft" isn't "left".
+            {"url": "https://other.example/b", "title": "x", "description": "yleft an unclaimed fund that only"},
+        ]
+        found = websearch.copies(phrase, results)
+        self.assertEqual([f["site"] for f in found], ["scamwarners.example"])
+        self.assertEqual(websearch.copies(phrase, []), [])
+
+    def test_only_a_clean_sentence_goes_to_the_web(self):
+        good = "Your late relative left an unclaimed fund that only you can receive"
+        self.assertEqual(websearch.good_quote(good, self.SCAM), good)
+        # Not in the email, too short, or carrying a name, address or number: fall back to a clean sentence.
+        for bad in ("A sentence that is not in this email at all, sadly", "Your late relative",
+                    "I am Barrister James Okoro.", "Dear Priya, I am Barrister James Okoro."):
+            q = websearch.good_quote(bad, self.SCAM)
+            self.assertTrue(q.startswith("Your late relative left"), q)
+        self.assertIsNone(websearch.good_quote("", "Call +234 801 234 5678 or write to claims@law.example now."))
+        old = os.environ.get("REDACT_WORDS")
+        os.environ["REDACT_WORDS"] = "chambers"
+        try:
+            self.assertFalse(websearch.safe("receive through our chambers this month"))
+        finally:
+            os.environ.pop("REDACT_WORDS")
+            if old is not None:
+                os.environ["REDACT_WORDS"] = old
+
+    def test_web_check_remembers_and_keeps_to_its_daily_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from uncle.store import Store
+            s = websearch.MockSearch()
+            w = websearch.WebCheck(Store(os.path.join(tmp, "s.db")), s, per_day=1)
+            r = w.check("one sentence from a scam letter going round", wait=1)
+            self.assertEqual([f["site"] for f in r["found"]], ["scam-warnings.example"])
+            self.assertEqual(w.check("one sentence from a scam letter going round")["at"], r["at"])
+            self.assertIsNone(w.check("a different sentence entirely, over the cap"))
+            self.assertIsNone(w.check(""))
+            self.assertEqual(len(s.queries), 1)
+        self.assertIn("no copies yet", websearch.web_line({"phrase": "x", "found": [], "at": 1}))
+        self.assertEqual(websearch.web_line({"phrase": "x"}), "")  # not back yet: say nothing
+        self.assertEqual(websearch.web_line(None), "")
+
+    def test_apify_run_poll_and_read(self):
+        seen = []
+
+        def fake(method, url, body=None, headers=None, timeout=60, retries=2):
+            seen.append((method, url, body, headers))
+            if url.endswith("/runs"):
+                return {"data": {"id": "r1", "status": "RUNNING"}}
+            if "/actor-runs/" in url:
+                return {"data": {"id": "r1", "status": "SUCCEEDED", "defaultDatasetId": "d1"}}
+            return [{"organicResults": [{"url": "https://a.example", "title": "t", "description": "d"}]}]
+        old, os.environ["APIFY_TOKEN"] = websearch.net.request, "ap-test"
+        old_sleep, websearch.time.sleep = websearch.time.sleep, lambda s: None
+        websearch.net.request = fake
+        try:
+            a = websearch.ApifySearch()
+            self.assertTrue(a.available())
+            self.assertEqual(a.search("left an unclaimed fund")[0]["url"], "https://a.example")
+        finally:
+            websearch.net.request, websearch.time.sleep = old, old_sleep
+            del os.environ["APIFY_TOKEN"]
+        self.assertEqual(seen[0][1], "https://api.apify.com/v2/actors/apify~google-search-scraper/runs")
+        self.assertEqual(seen[0][2]["queries"], '"left an unclaimed fund"')
+        self.assertEqual(seen[0][3]["Authorization"], "Bearer ap-test")
+        self.assertEqual(seen[1][1], "https://api.apify.com/v2/actor-runs/r1")
+        self.assertEqual(seen[2][1], "https://api.apify.com/v2/datasets/d1/items?clean=true")
+
+
 class AgentMailConnectorTests(unittest.TestCase):
     def test_message_read_falls_back_to_its_thread(self):
         calls = []
@@ -496,6 +574,17 @@ class ClaudeTests(unittest.TestCase):
         self.assertEqual(kw["output_config"]["effort"], "low")
         self.assertFalse(kw["output_config"]["format"]["schema"]["additionalProperties"])
         self.assertNotIn("temperature", kw)
+
+    def test_claude_answers_list_questions(self):
+        from uncle import claude
+        qs = {"red_flags": clients.listing("Red flags?", 2)}
+        schema = claude._schema(qs)
+        self.assertEqual(schema["properties"]["red_flags"]["properties"]["items"]["type"], "array")
+        self.assertIn("a list, at most 2 items", claude._question_text(qs))
+        a = claude.to_jev(qs, {"red_flags": {"items": ["asks for a fee ", "", "x" * 300, "third"]}})
+        self.assertEqual(clients.listed(a, "red_flags"), ["asks for a fee", "x" * 200])
+        self.assertEqual(clients.listed({}, "red_flags"), [])
+        self.assertTrue(claude.Claude.lists)
 
     def test_letters_move_system_out_and_start_with_the_user(self):
         from uncle import claude
@@ -753,6 +842,127 @@ class FlowTests(unittest.TestCase):
         self.assertIn("practice letter", self.app.store.diary(1)[0]["text"])
         self.assertNotIn(judge, self.app.home_html())
         self.assertIn(f"mailto:{INBOX}", self.app.home_html())
+
+    def test_a_visitor_gets_the_verdict_and_can_play_the_scammer(self):
+        judge = "judge@fly.example"
+        mid, _ = self.mail.deliver(judge, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.assertEqual(self.eng.handle(mid), "visitor")
+        first = self.mail.outbox[0]["text"]
+        self.assertIn("Yes, it's a scam", first)
+        self.assertIn("The red flags:\n- asks for a fee before you get paid", first)
+        self.assertIn("Apify found the same words on 1 other page", first)
+        self.assertIn("scam-warnings.example", first)
+        self.assertNotIn("support.mail.example", first)  # a help page isn't a copy
+        self.assertIn("Reply to this email as the scammer", first)
+        searched = self.app.web.searcher.queries
+        self.assertEqual(len(searched), 1)
+        for secret in ("claims.desk", "Okoro", "4,500,000", "me@gmail.com"):
+            self.assertNotIn(secret, searched[0])
+        # They reply in the same mail thread, as the scammer.
+        tid = self.mail.outbox[0]["thread_id"]
+        r1, _ = self.mail.deliver(judge, "Re: Fwd: URGENT inheritance",
+                                  "Why you not send the fee? Send it now, this is urgent!", thread_id=tid)
+        self.assertEqual(self.eng.handle(r1), "practice")
+        a1 = self.mail.outbox[-1]
+        self.assertEqual(a1["kind"], "reply")
+        self.assertIn("Practice, round 1 of 5", a1["text"])
+        self.assertIn("Nothing goes to any real scammer", a1["text"])
+        self.assertIn("still hooked", a1["text"])
+        self.assertEqual(persona.check_letter(a1["text"].split("\n------------------------------")[0]), [])
+        # The connector sometimes can't reply in a thread, so Uncle starts a new one: still the same game.
+        self.app.cfg.practice_rounds = 3
+        r2, _ = self.mail.deliver(judge, "Re: Fwd: URGENT inheritance", "Old man, the fee. Today.")
+        self.assertEqual(self.eng.handle(r2), "practice")
+        self.assertIn("round 2 of 3", self.mail.outbox[-1]["text"])
+        r3, _ = self.mail.deliver(judge, "Re: Fwd: URGENT inheritance", "Last chance, send the fee", thread_id=tid)
+        self.eng.handle(r3)
+        self.assertIn("That was the last round", self.mail.outbox[-1]["text"])
+        n = len(self.mail.outbox)
+        r4, _ = self.mail.deliver(judge, "Re: Fwd: URGENT inheritance", "Hello??", thread_id=tid)
+        self.eng.handle(r4)
+        self.assertEqual(len(self.mail.outbox), n)  # the game is over
+        # Nothing ever went to the scammer, and the game stays off the page.
+        self.assertFalse([o for o in self.mail.outbox if o.get("to") == "claims.desk@barrister-office.example"])
+        self.assertEqual(self.app.store.q("SELECT * FROM letters"), [])
+        home = self.app.home_html()
+        self.assertNotIn(judge, home)
+        self.assertNotIn("Old man", home)
+        self.assertIn("reply to him as the scammer", home)
+        # A new forward from the same person is a new scam, not a move in the old game.
+        f2, _ = self.mail.deliver(judge, "Fwd: another one", GMAIL_FORWARD)
+        self.assertEqual(self.eng.handle(f2), "visitor")
+
+    def test_playing_the_scammer_stops_when_they_ask(self):
+        judge = "judge2@fly.example"
+        mid, _ = self.mail.deliver(judge, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.eng.handle(mid)
+        tid = self.mail.outbox[0]["thread_id"]
+        r1, _ = self.mail.deliver(judge, "Re: Fwd", "Please stop writing to me, wrong person.", thread_id=tid)
+        self.assertEqual(self.eng.handle(r1), "practice")
+        self.assertIn("I'd stop writing here, because you asked me to stop", self.mail.outbox[-1]["text"])
+        n = len(self.mail.outbox)
+        r2, _ = self.mail.deliver(judge, "Re: Fwd", "Wait, send the fee", thread_id=tid)
+        self.eng.handle(r2)
+        self.assertEqual(len(self.mail.outbox), n)
+        # Practice replies have their own daily count: playing doesn't use up anybody's forwards.
+        self.app.cfg.visitor_per_day = 1
+        other = "judge3@fly.example"
+        m3, _ = self.mail.deliver(other, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.eng.handle(m3)
+        t3 = self.mail.outbox[-1]["thread_id"]
+        for i in range(2):
+            ri, _ = self.mail.deliver(other, "Re: Fwd", f"Send the fee now {i}", thread_id=t3)
+            self.eng.handle(ri)
+        self.assertIn("round 2 of 5", self.mail.outbox[-1]["text"])
+        forged, _ = self.mail.deliver(other, "Re: Fwd", "Send the fee", thread_id=t3)
+        self.mail.messages[forged]["labels"].append("unauthenticated")
+        n = len(self.mail.outbox)
+        self.eng.handle(forged)
+        self.assertEqual(len(self.mail.outbox), n)
+
+    def test_the_verdict_reaches_the_boss_and_the_page(self):
+        t, _ = self.forward_and_approve()
+        approval = [o for o in self.mail.outbox if o["kind"] == "reply"][0]["text"]
+        self.assertTrue(approval.startswith("Jev puts it at"))
+        self.assertIn("The red flags:", approval)
+        self.assertIn("Apify found the same words", approval)
+        page = self.app.thread_html(t["id"])
+        self.assertIn('class="verdict"', page)
+        self.assertIn("asks for a fee before you get paid", page)
+        self.assertIn('href="https://scam-warnings.example/2026/11/a"', page)
+        self.assertIn("rel=\"noopener nofollow\"", page)
+        for secret in ("claims.desk@barrister-office.example", "Okoro"):
+            self.assertNotIn(secret, page)
+        self.assertIn("Apify (looks for copies of each scam on the web)", self.app.home_html())
+
+    def test_rounds_fill_in_verdicts_for_older_conversations(self):
+        t, _ = self.forward_and_approve()
+        self.app.store.update_thread(t["id"], flags=None, web=None)
+        self.assertNotIn('class="verdict"', self.app.thread_html(t["id"]))
+        self.assertEqual(self.eng.rounds()["verdicts"], 2)  # red flags, then the web search
+        t = self.app.store.thread(t["id"])
+        self.assertIn("asks for a fee", t["flags"])
+        self.assertIn('"at"', t["web"])
+        self.assertIn('class="verdict"', self.app.thread_html(t["id"]))
+        self.assertEqual(self.eng.fill_in(), 0)  # nothing left to do
+        # A search that didn't come back in time is finished on a later round, from the cache when it can.
+        self.app.store.update_thread(t["id"], web=json.dumps({"phrase": json.loads(t["web"])["phrase"]}))
+        before = len(self.app.web.searcher.queries)
+        self.assertEqual(self.eng.fill_in(), 1)
+        self.assertEqual(len(self.app.web.searcher.queries), before)
+        # A broken search is noted and tried again later; it never stops the rounds.
+        self.app.store.update_thread(t["id"], web=json.dumps({"phrase": "a sentence nobody searched for before"}))
+
+        def broken(query, wait=90):
+            raise RuntimeError("Apify run FAILED")
+        self.app.web.searcher.search = broken
+        self.assertEqual(self.eng.rounds()["verdicts"], 0)
+        self.assertNotIn('"at"', self.app.store.thread(t["id"])["web"])
+
+    def test_try_box_shows_the_red_flags(self):
+        j = self.eng.try_uncle(GMAIL_FORWARD, "1.2.3.4")
+        self.assertIn("asks for a fee before you get paid", j["flags"])
+        self.assertIn("j.flags", self.app.home_html())
 
     def test_one_follow_up_after_a_day_of_silence(self):
         t, first = self.forward_and_approve()

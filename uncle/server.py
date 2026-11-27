@@ -7,7 +7,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import awake, card, claude, clients, gateway, memory, meter, redact, voice, web
+from . import awake, card, claude, clients, gateway, memory, meter, redact, voice, web, websearch
 from .config import Config
 from .engine import Engine
 from .store import Store
@@ -67,7 +67,9 @@ class App:
         speaker = voice.MockSpeaker() if self.cfg.mock else voice.Deepgram(self.cfg.voice_model)
         self.voice = voice.Voice(os.path.join(os.path.dirname(os.path.abspath(self.cfg.db_path)), "voice"),
                                  speaker, per_day=self.cfg.voice_per_day)
-        self.engine = Engine(self.cfg, self.store, self.mail, self.jev, self.llm, memory=self.memory)
+        searcher = websearch.MockSearch() if self.cfg.mock else websearch.ApifySearch()
+        self.web = websearch.WebCheck(self.store, searcher, per_day=self.cfg.web_per_day)
+        self.engine = Engine(self.cfg, self.store, self.mail, self.jev, self.llm, memory=self.memory, web=self.web)
         self.meter = meter.Meter(self.store)
         self.jobs = queue.Queue()
         self.cards = {}  # key -> (version, png)
@@ -176,7 +178,8 @@ class App:
                                            (time.time() - 86400,)),
                         card=self.card_url("home"), families=self.families(),
                         memory_name=self.memory.name if self.memory.available() else None,
-                        voice_name=self.voice.name if self.voice.available() else None)
+                        voice_name=self.voice.name if self.voice.available() else None,
+                        web_name=self.web.name if self.web.available() else None)
 
     def kin(self, t):
         """The other conversations with the same script, either way round: [(row, score)], public ones only,
@@ -213,7 +216,8 @@ class App:
             return None
         return web.thread_page(self.cfg, self.meter_stats(), t, self._letters(t),
                                self.store.diary(50, tid), card=self.card_url(tid), kin=self.kin(t),
-                               memory_name=self.memory.name, voice_on=self.voice.available())
+                               memory_name=self.memory.name, voice_on=self.voice.available(),
+                               web_name=self.web.name)
 
     def letter_audio(self, lid):
         """Uncle's own letter, read aloud, from a conversation on the page. None for anything else."""

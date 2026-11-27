@@ -20,6 +20,7 @@ SERVICES = {
     "anthropic": (["anthropic"], "https://api.anthropic.com", "ANTHROPIC_API_KEY"),
     "pinecone": (["pinecone"], "https://api.pinecone.io", "PINECONE_API_KEY"),
     "deepgram": (["deepgram"], "https://api.deepgram.com", "DEEPGRAM_API_KEY"),
+    "apify": (["apify"], "https://api.apify.com", "APIFY_TOKEN"),
 }
 
 # Services that take their key some other way than "Authorization: Bearer <key>": (header, prefix).

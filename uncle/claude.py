@@ -36,6 +36,9 @@ def _schema(questions):
         elif q["type"] == "score":
             fields = {"level": {"type": "integer", "description": f"0 to {len(q['criteria']) - 1}"},
                       "confidence": {"type": "number", "description": "0 to 1"}}
+        elif q["type"] == "list":
+            fields = {"items": {"type": "array", "items": {"type": "string"},
+                                "description": f"At most {q.get('most', 4)} items"}}
         else:
             continue
         props[key] = {"type": "object", "properties": fields, "required": list(fields), "additionalProperties": False}
@@ -53,6 +56,8 @@ def _question_text(questions):
         elif q["type"] == "score":
             levels = "; ".join(f"{i}: {desc}" for i, desc in enumerate(q["criteria"]))
             lines.append(f"- {key} (pick a level): {q['instructions']} Levels: {levels}")
+        elif q["type"] == "list":
+            lines.append(f"- {key} (a list, at most {q.get('most', 4)} items): {q['instructions']}")
     return "\n".join(lines)
 
 
@@ -78,12 +83,16 @@ def to_jev(questions, raw):
             n = len(q["criteria"])
             out[key] = {"type": "score", "score": _clamp(a.get("level"), 0, n - 1),
                         "confidence": _clamp(a.get("confidence"))}
+        elif q["type"] == "list":
+            items = [str(x).strip()[:200] for x in (a.get("items") or []) if str(x).strip()]
+            out[key] = {"type": "list", "items": items[:q.get("most", 4)]}
     return out
 
 
 class Claude:
     name, maker, about = "Claude", "Anthropic", "Anthropic's model"
     provider = "anthropic"
+    lists = True  # can answer "list" questions (red flags), which Jev's API has no shape for
 
     def __init__(self, client=None, model=None, effort=None):
         self._client = client

@@ -176,6 +176,16 @@ def score(instructions, levels):
     return {"type": "score", "instructions": instructions, "criteria": levels}
 
 
+def listing(instructions, most=4):
+    """A short list of plain-words items. Only deciders with `lists = True` (Claude) can answer one."""
+    return {"type": "list", "instructions": instructions, "most": most}
+
+
+def listed(answers, key):
+    a = answers.get(key) or {}
+    return [x.strip() for x in (a.get("items") or []) if isinstance(x, str) and x.strip()]
+
+
 def p_yes(answers, key, default=0.0):
     a = answers.get(key) or {}
     v = a.get("noul")
@@ -257,7 +267,21 @@ class MockJev:
                 angry = len(re.findall(r"!|urgent|now|immediately|waste|stupid|why", low))
                 val = min(n - 1, angry * 0.7)
                 out[key] = {"type": "score", "score": val, "confidence": 0.6}
+            elif q["type"] == "list":
+                if "red flag" in q["instructions"].lower() or key == "red_flags":
+                    items = [flag for word, flag in MOCK_FLAGS if word in low]
+                else:  # a sentence quoted from the email
+                    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.split()) >= 8]
+                    items = [" ".join(sentences[0].split()[:12])] if sentences else []
+                out[key] = {"type": "list", "items": items[:q.get("most", 4)]}
         return out
+
+    lists = True
+
+
+MOCK_FLAGS = [("fee", "asks for a fee before you get paid"), ("next of kin", "a stranger says you are owed money"),
+              ("urgent", "rushes you"), ("bank details", "asks for your bank details"),
+              ("inheritance", "money from someone you never knew")]
 
 
 # --------------------------------------------------------------------------- Ollama

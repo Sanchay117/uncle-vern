@@ -11,10 +11,24 @@ import threading
 import time
 import traceback
 
-from . import intake, net, persona, redact
-from .clients import choice, noul, p_yes, picked, score, scored
+from . import intake, net, persona, redact, websearch
+from .clients import choice, listed, listing, noul, p_yes, picked, score, scored
 
 DAY = 86400
+
+RED_FLAGS = ("If this is a scam, the red flags a careful grandparent should notice: two to four short phrases in "
+             "plain words, at most 12 words each, each naming one concrete thing this email does (for example "
+             "\"asks for a fee before you get paid\" or \"a stranger says you're owed millions\"). Never quote names, "
+             "email addresses, phone numbers, amounts or links. Leave it empty if this isn't a scam.")
+QUOTE = ("One sentence to search the web for: 8 to 14 words copied exactly, word for word, from the story the email "
+         "tells (not its greeting or sign-off), with no email address, phone number or link in it.")
+
+
+def loads(s, default=None):
+    try:
+        return json.loads(s) if s else default
+    except (TypeError, ValueError):
+        return default
 
 SCAM_TYPES = {
     "advance_fee": "Inheritance, lottery, prize, donation, compensation fund or business deal where the reader "
@@ -115,14 +129,92 @@ def kind_a(kind):
 
 
 class Engine:
-    def __init__(self, cfg, store, mail, jev, llm, memory=None):
+    def __init__(self, cfg, store, mail, jev, llm, memory=None, web=None):
         self.cfg = cfg
         self.store = store
         self.mail = mail
         self.jev = jev
         self.llm = llm
         self.memory = memory
+        self.web = web
         self.lock = threading.Lock()
+        # Web searches run beside letter writing; one that outlasts its wait still finishes and is remembered.
+        self.pool = concurrent.futures.ThreadPoolExecutor(3, thread_name_prefix="web")
+
+    # ------------------------------------------------------------ the verdict: why it's a scam
+    def _questions(self, base):
+        """Add red flags and a sentence to search for, when the decider can answer lists (Claude can)."""
+        if getattr(self.jev, "lists", False):
+            return dict(base, red_flags=listing(RED_FLAGS, 4), quote=listing(QUOTE, 1))
+        return base
+
+    @staticmethod
+    def _flags(a):
+        return [f.rstrip(". ") for f in listed(a, "red_flags")][:4]
+
+    def _look_up(self, a, text, wait=60):
+        """Start searching the web for one sentence of this scam: (phrase, future). The future is None when
+        Uncle can't look right now; the phrase is kept so a later round can look instead."""
+        phrase = websearch.good_quote((listed(a, "quote") or [""])[0], text)
+        if not phrase or not self.web or not self.web.available():
+            return phrase, None
+        return phrase, self.pool.submit(self.web.check, phrase, wait)
+
+    def _web_result(self, searching, timeout=45):
+        """What the search found, or just {"phrase"} when it isn't back yet (a later round fills it in)."""
+        phrase, future = searching
+        if not phrase:
+            return None
+        if future:
+            try:
+                res = future.result(timeout=timeout)
+                if res:
+                    return res
+            except Exception as exc:  # noqa: BLE001  (a nicety: nothing waits on it for long)
+                self.store.note(f"The web search didn't come back in time ({_err(exc)}).", kind="error", public=False)
+        return {"phrase": phrase}
+
+    def _verdict(self, p, kind, flags, web):
+        """'Claude puts it at 99%: an advance fee scam.' plus the red flags and what the web search found."""
+        parts = [f"{self.jev.name} puts it at {pct(p)}: {kind_a(kind)} scam."]
+        if flags:
+            parts.append("The red flags:\n" + "\n".join(f"- {f}" for f in flags))
+        line = websearch.web_line(web, self.web.name if self.web else "Apify")
+        if line:
+            parts.append(line)
+        return "\n\n".join(parts)
+
+    def fill_in(self, limit=3):
+        """Red flags and a web search for conversations from before Uncle gave verdicts. Returns how many."""
+        n = 0
+        rows = self.store.q("SELECT id, scam_subject, scam_text, flags, web FROM threads WHERE status IN "
+                            "('pending_approval','active','closed') AND scam_text IS NOT NULL AND scam_text != '' "
+                            "AND flags IS NULL AND ? ORDER BY id LIMIT ?",
+                            (1 if getattr(self.jev, "lists", False) else 0, limit))
+        for t in rows:
+            a = self.jev.ask(intake_state(t["scam_subject"], t["scam_text"]), self._questions({}))
+            phrase = websearch.good_quote((listed(a, "quote") or [""])[0], t["scam_text"])
+            self.store.update_thread(t["id"], flags=json.dumps(self._flags(a)),
+                                     web=t["web"] or (json.dumps({"phrase": phrase}) if phrase else None))
+            n += 1
+        if self.web and self.web.available():
+            for t in self.store.q("SELECT id, web FROM threads WHERE web IS NOT NULL AND web NOT LIKE '%\"at\"%' "
+                                  "ORDER BY id LIMIT ?", (limit,)):
+                phrase = (loads(t["web"], {}) or {}).get("phrase")
+                if not phrase:
+                    self.store.update_thread(t["id"], web=None)
+                    continue
+                try:
+                    res = self.web.check(phrase, wait=90)
+                except Exception as exc:  # noqa: BLE001  (try again next round)
+                    self.store.note(f"{self.web.name} couldn't search the web ({_err(exc)}).", kind="error",
+                                    public=False)
+                    break
+                if res is None:
+                    break  # today's searches are used up
+                self.store.update_thread(t["id"], web=json.dumps(res))
+                n += 1
+        return n
 
     # ------------------------------------------------------------ memory for scripts
     def _remember(self, tid):
@@ -170,7 +262,8 @@ class Engine:
                 return "self"
             if "spam" in (msg.get("labels") or []) and sender not in self.cfg.owner_emails and not (
                     (msg.get("thread_id") and self.store.thread_by_am(msg["thread_id"]))
-                    or self.store.active_by_scammer(sender) or intake.looks_forwarded(msg)):
+                    or self.store.active_by_scammer(sender) or intake.looks_forwarded(msg)
+                    or self._practice_for(msg, sender)):
                 # Spam from the boss is a forwarded scam and spam from a pen pal is a reply; the rest is noise.
                 if self.store.claim_message(message_id, msg.get("thread_id"), sender):
                     self.store.finish_message(message_id, "spam")
@@ -216,6 +309,10 @@ class Engine:
             except Exception as exc:  # noqa: BLE001
                 self.store.note(f"Couldn't fill in {self.memory.name}'s memory ({_err(exc)}).", kind="error",
                                 public=False)
+        try:
+            out["verdicts"] = self.fill_in()
+        except Exception as exc:  # noqa: BLE001
+            self.store.note(f"Couldn't fill in red flags or web searches ({_err(exc)}).", kind="error", public=False)
         return out
 
     def nudge_due(self, now=None):
@@ -260,6 +357,9 @@ class Engine:
         thread = thread or self.store.active_by_scammer(sender)
         if thread:
             return "scammer", self._scammer_letter(msg, thread)
+        prac = self._practice_for(msg, sender)
+        if prac:
+            return "practice", self._practice_reply(msg, prac, sender)
         if intake.looks_forwarded(msg):
             return "visitor", self._visitor(msg, sender)
         return "stranger", self._stranger(msg, sender)
@@ -276,14 +376,15 @@ class Engine:
                                   "their email address alone on the first line, the scam below.\n\nVern")
             self.store.note("Got a note from the boss with no scam inside, so I asked for the real thing.")
             return None
-        a = self.jev.ask(intake_state(scam["subject"], scam["body"]), intake_questions())
+        a = self.jev.ask(intake_state(scam["subject"], scam["body"]), self._questions(intake_questions()))
         p = p_yes(a, "is_scam")
         p_reply = p_yes(a, "wants_email_reply")
         kind, _ = picked(a, "scam_type", "other")
         to = self._pick_address(scam)
         base = dict(scammer_addr=to or "", scammer_name=scam.get("from_name", ""), scam_subject=scam["subject"],
                     scam_text=scam["body"][:20000], scam_type=kind, scam_prob=p,
-                    owner_thread_id=msg.get("thread_id"), owner_message_id=msg["message_id"])
+                    owner_thread_id=msg.get("thread_id"), owner_message_id=msg["message_id"],
+                    flags=json.dumps(self._flags(a)))
         if p < self.cfg.scam_threshold:
             tid = self.store.new_thread(status="rejected", close_reason=f"{self.jev.name}: only {pct(p)} likely a scam", **base)
             self.store.note(f"{self.jev.name} rated a forwarded email only {pct(p)} likely to be a scam, so I left it alone.", tid)
@@ -313,9 +414,12 @@ class Engine:
             tid = self.store.new_thread(status="rejected", close_reason="too many open conversations", **base)
             self._tell_owner(msg, "My plate's full right now. I'll take this one when a pen pal gives up.\n\nVern")
             return tid
+        searching = self._look_up(a, scam["body"])
         letter, problems = persona.write_letter(self.llm, persona.opening_messages(
             scam["subject"], scam["body"], pen_pals=self._pen_pals()))
-        tid = self.store.new_thread(status="pending_approval", draft=letter, **base)
+        web = self._web_result(searching)
+        tid = self.store.new_thread(status="pending_approval", draft=letter, web=json.dumps(web) if web else None,
+                                    **base)
         self.store.note(
             f"New one from the boss: {kind_a(kind)} scam. {self.jev.name}: {pct(p)} scam, {pct(p_reply)} wants an "
             f"email back. Drafted my first letter and asked the boss before sending.", tid)
@@ -524,11 +628,11 @@ class Engine:
                 "Thanks for writing! I couldn't find the scam in there, though. Open it, press plain Forward "
                 "(not \"as attachment\") and send it to me, and I'll show you what I'd write back.\n\nVern"))
             return None
-        a = self.jev.ask(f"Subject: {scam['subject']}\n\n{scam['body'][:6000]}", {
+        a = self.jev.ask(f"Subject: {scam['subject']}\n\n{scam['body'][:6000]}", self._questions({
             "is_scam": noul("Is this email a scam or fraud attempt: trying to get money, gift cards, crypto, "
                             "personal or banking details, or remote access from the reader under false pretenses?"),
             "scam_type": choice("What kind of email is this?", SCAM_TYPES),
-        })
+        }))
         p = p_yes(a, "is_scam")
         kind, _ = picked(a, "scam_type", "other")
         if p < self.cfg.scam_threshold:
@@ -539,24 +643,99 @@ class Engine:
             self.store.note(f"Someone forwarded me an email to see what I'd say. {self.jev.name}: only {pct(p)} "
                             "a scam, so I sat it out.")
             return None
+        flags = self._flags(a)
+        searching = self._look_up(a, scam["body"])
         letter, _ = persona.write_letter(self.llm, persona.opening_messages(
             scam["subject"], scam["body"], pen_pals=self._pen_pals()))
+        web = self._web_result(searching)
         to = self._pick_address(scam)
-        nominated = self._nominate(scam, to, kind, p, letter, sender)
+        nominated = self._nominate(scam, to, kind, p, letter, sender, flags, web)
         later = ("I've asked my boss whether I should write to them for real. If he says yes, the conversation "
                  "goes up on my page with names, emails and numbers blacked out. ") if nominated else ""
-        self._answer(msg["message_id"], sender, subject, (
-            f"Thanks for sending this one over! {self.jev.name} says it's {pct(p)} likely {kind_a(kind)} scam.\n\n"
+        n = self.cfg.practice_rounds
+        res = self._answer(msg["message_id"], sender, subject, (
+            "Thanks for sending this one over! Yes, it's a scam.\n\n"
+            f"{self._verdict(p, kind, flags, web)}\n\n"
+            "Don't answer it yourself, click its links or send anything. Leave the answering to me.\n\n"
             "Here's what I'd write back to them:\n\n"
             f"------------------------------\n{letter}\n------------------------------\n\n"
+            "Want to see me handle them? Reply to this email as the scammer: push me, get cross, ask for the fee. "
+            f"I'll write back the way I do to the real ones, for up to {n} rounds. Each email you send wakes me "
+            "up on my Fly.io Sprite, and I nod off again after.\n\n"
             f"Nothing has gone to the scammer. {later}You can read along with my real pen pals here:\n"
             f"{self.cfg.public_url}\n\nVern"))
+        self.store.run("INSERT OR REPLACE INTO practice(am_thread_id, visitor, scam, turns, started_at, updated_at) "
+                       "VALUES(?,?,?,?,?,?)", (res.get("thread_id") or msg.get("thread_id") or msg["message_id"],
+                                               sender, scam["body"][:4000],
+                                               json.dumps([{"who": "uncle", "text": letter}]), now, now))
         self.store.note(f"Someone forwarded me {kind_a(kind)} scam ({pct(p)}) to see what I'd say. I mailed them "
                         "my practice letter. Nothing went to the scammer"
                         + (" yet: I asked the boss if I should write for real." if nominated else "."), nominated)
         return nominated
 
-    def _nominate(self, scam, to, kind, p, letter, sender):
+    # ------------------------------------------------------------ a visitor plays the scammer by email
+    def _practice_for(self, msg, sender):
+        """The practice conversation this email continues, if any: by mail thread, else by sender."""
+        tid = msg.get("thread_id")
+        row = self.store.one("SELECT * FROM practice WHERE am_thread_id=? AND visitor=?", (tid, sender)) if tid else None
+        if row or intake.looks_forwarded(msg):
+            return row
+        # A fresh-email fallback starts a new mail thread, so also know them by address for a couple of days.
+        return self.store.one("SELECT * FROM practice WHERE visitor=? AND updated_at>=? ORDER BY updated_at DESC",
+                              (sender, time.time() - 2 * DAY))
+
+    def _practice_reply(self, msg, prac, sender):
+        """The visitor writes back as the scammer, and Uncle answers by email the way he answers a real one.
+        Nothing goes to any real scammer, and nothing of theirs goes on the page."""
+        labels = [l.lower() for l in (msg.get("labels") or [])]
+        if "unauthenticated" in labels:
+            self.store.note("A practice reply the post office couldn't vouch for. Didn't answer.", public=False)
+            return None
+        turns = loads(prac["turns"], []) or []
+        rounds = sum(1 for t in turns if t["who"] == "scammer")
+        n = self.cfg.practice_rounds
+        if rounds >= n:
+            return None  # they've had their rounds, and the last letter said so
+        now = time.time()
+        h = ip_hash("practice:" + sender)
+        mine = self.store.one("SELECT COUNT(*) n FROM tries WHERE ip_hash=? AND at>=?", (h, now - DAY))["n"]
+        total = self.store.one("SELECT COUNT(*) n FROM tries WHERE at>=?", (now - DAY,))["n"]
+        if mine >= self.cfg.visitor_per_day * n or total >= self.cfg.try_per_day:
+            self.store.note("A practice reply from someone over today's limit. Let it be.", public=False)
+            return None
+        self.store.run("INSERT INTO tries(ip_hash, at) VALUES(?,?)", (h, now))
+        text = (msg.get("extracted_text") or msg.get("text") or intake.strip_html(msg.get("html") or "")).strip()[:3000]
+        subject = msg.get("subject") or "my letter"
+        last_uncle = next((t["text"] for t in reversed(turns) if t["who"] == "uncle"), "")
+        p_scam, hooked, stop, ask, fr = self._read_reply(prac["scam"], last_uncle, text)
+        read = (f"{self.jev.name} read your letter: {pct(p_scam)} still a scam, {pct(hooked)} still hooked, mood "
+                f"{fr:.1f} of 4, wants me to {ASK_WORDS.get(ask, 'do something')}.")
+        turns.append({"who": "scammer", "text": text})
+        if stop >= 0.6 or p_scam < 0.3:
+            why = "you asked me to stop" if stop >= 0.6 else "that doesn't read like a scam any more"
+            self._answer(msg["message_id"], sender, subject, (
+                f"{read}\n\nI'd stop writing here, because {why}. I never pester real people.\n\n"
+                f"Thanks for playing. My real pen pals are here: {self.cfg.public_url}\n\nVern"))
+            turns += [{"who": "scammer", "text": ""}] * (n - rounds - 1)  # that's the end of it
+        else:
+            history = [("scammer", prac["scam"])] + [(t["who"], t["text"]) for t in turns]
+            letter, _ = persona.write_letter(self.llm, persona.reply_messages(history, ask, fr,
+                                                                              pen_pals=self._pen_pals()))
+            turns.append({"who": "uncle", "text": letter})
+            more = ("Reply again to keep going." if rounds + 1 < n else
+                    "That was the last round. A real scammer gets to keep going as long as they like.")
+            self._answer(msg["message_id"], sender, subject, (
+                f"{letter}\n\n------------------------------\n"
+                f"Practice, round {rounds + 1} of {n}. {read} Nothing goes to any real scammer. {more}\n"
+                "Your email just woke me up on my Fly.io Sprite. Back to sleep now.\n"
+                f"My real pen pals: {self.cfg.public_url}"))
+        self.store.run("UPDATE practice SET turns=?, updated_at=? WHERE am_thread_id=?",
+                       (json.dumps(turns), now, prac["am_thread_id"]))
+        self.store.note(f"Someone is playing the scammer by email to see what I do (round {rounds + 1}). I wrote "
+                        "back. Nothing went to any real scammer.")
+        return None
+
+    def _nominate(self, scam, to, kind, p, letter, sender, flags=(), web=None):
         """A forward from someone else can become a real pen pal, but only on the boss's yes, and only when the
         address is on a free mail service: a company's own domain is too often a real business or a hacked box."""
         if not to or not intake.webmail(to) or not self.cfg.owner_emails:
@@ -567,9 +746,10 @@ class Engine:
             return None
         tid = self.store.new_thread(
             status="pending_approval", scammer_addr=to, scammer_name=scam.get("from_name", ""),
-            scam_subject=scam["subject"], scam_text=scam["body"][:20000], scam_type=kind, scam_prob=p, draft=letter)
+            scam_subject=scam["subject"], scam_text=scam["body"][:20000], scam_type=kind, scam_prob=p, draft=letter,
+            flags=json.dumps(list(flags)), web=json.dumps(web) if web else None)
         res = self.mail.send(self.cfg.inbox, self.cfg.owner_emails[0], f"A friend sent me a scam: {scam['subject']}"[:150], (
-            f"Somebody ({sender}) forwarded me {kind_a(kind)} scam. {self.jev.name} puts it at {pct(p)}.\n\n"
+            f"Somebody ({sender}) forwarded me a scam.\n\n{self._verdict(p, kind, flags, web)}\n\n"
             f"I'd like to write to: {to}\n\n"
             "Only say yes if you know who sent it. A stranger could fake a forward to set me on someone "
             f"innocent.\n\n{self._kin_line(self._remember(tid))}"
@@ -585,28 +765,31 @@ class Engine:
         if "spam" in labels or "unauthenticated" in labels:
             self.store.note("Mail from a sender the post office couldn't vouch for. Didn't open it.", public=False)
             return None
-        a = self.jev.ask(f"Subject: {msg.get('subject', '')}\n\n{text[:6000]}", {
+        a = self.jev.ask(f"Subject: {msg.get('subject', '')}\n\n{text[:6000]}", self._questions({
             "is_scam": noul("Is this email a scam or fraud attempt: trying to get money, gift cards, crypto, "
                             "personal or banking details, or remote access from the reader under false pretenses?"),
             "scam_type": choice("What kind of email is this?", SCAM_TYPES),
-        })
+        }))
         p = p_yes(a, "is_scam")
         kind, _ = picked(a, "scam_type", "other")
         if p < self.cfg.stranger_threshold or not self.cfg.owner_emails:
             self.store.note(f"A letter from someone new. {self.jev.name}: {pct(p)} scam, so I didn't answer.", public=True)
             return None
         name, _ = addr_of(msg.get("from"))
+        flags = self._flags(a)
+        searching = self._look_up(a, text)
         letter, _ = persona.write_letter(self.llm, persona.opening_messages(msg.get("subject", ""), text,
                                                                             pen_pals=self._pen_pals()))
+        web = self._web_result(searching)
         tid = self.store.new_thread(
             status="pending_approval", scammer_addr=sender, scammer_name=name, scam_subject=msg.get("subject", ""),
             scam_text=text[:20000], scam_type=kind, scam_prob=p, draft=letter, am_thread_id=msg.get("thread_id"),
-            origin_message_id=msg["message_id"])
+            origin_message_id=msg["message_id"], flags=json.dumps(flags), web=json.dumps(web) if web else None)
         self.store.add_letter(tid, "scammer", msg["message_id"], text, redact.redact(text, names=[name] if name else []))
         self.store.note(f"A {kind.replace('_', ' ')} scam wrote to me directly ({pct(p)}). Asked the boss first.", tid)
         owner = self.cfg.owner_emails[0]
         res = self.mail.send(self.cfg.inbox, owner, f"A scammer wrote to me: {msg.get('subject', '')}"[:150], (
-            f"Someone wrote to me directly. {self.jev.name} says {pct(p)} it's {kind_a(kind)} scam.\n\n"
+            f"Someone wrote to me directly.\n\n{self._verdict(p, kind, flags, web)}\n\n"
             f"From: {sender}\n\n{self._kin_line(self._remember(tid))}Here's what I'd write back:\n\n{letter}\n\n"
             "Reply \"yes\" to send it, or \"no\".\n\nVern"))
         self.store.update_thread(tid, owner_thread_id=res.get("thread_id"), owner_message_id=res.get("message_id"))
@@ -639,8 +822,9 @@ class Engine:
         careful = "" if intake.webmail(to) else (
             f"Careful: {domain} isn't a free email service. It could be a real business, or a mailbox the "
             "scammer broke into. Say yes only if you're sure it's theirs.\n\n")
+        t = self.store.thread(tid) or {}
         otid = self._tell_owner(msg, (
-            f"This one's {kind_a(kind)} scam. {self.jev.name} puts it at {pct(p)}.\n\n"
+            f"{self._verdict(p, kind, loads(t.get('flags'), []), loads(t.get('web')))}\n\n"
             f"I'd like to write to: {to}\n\n{careful}{extra}"
             "Here's my letter:\n\n"
             f"{letter}\n\n"
@@ -683,11 +867,11 @@ class Engine:
         # The decision and the letter at once, so a visitor waits for one model call, not two.
         # A letter written for something that turns out not to be a scam is simply thrown away.
         with concurrent.futures.ThreadPoolExecutor(2) as pool:
-            decided = pool.submit(self.jev.ask, text, {
+            decided = pool.submit(self.jev.ask, text, self._questions({
                 "is_scam": noul("Is this email a scam or fraud attempt: trying to get money, gift cards, crypto, "
                                 "personal or banking details, or remote access from the reader under false pretenses?"),
                 "scam_type": choice("What kind of email is this?", SCAM_TYPES),
-            })
+            }))
             written = pool.submit(persona.write_letter, self.llm,
                                   persona.opening_messages("", text, pen_pals=self._pen_pals()))
             a = decided.result()
@@ -700,6 +884,7 @@ class Engine:
                                                 "Uncle only writes to scammers, so he's sitting this one out."}
             letter, _ = written.result()
         return {"scam_prob": p, "scam_type": kind, "decider": self.jev.name, "letter": letter,
+                "flags": self._flags(a), "kind": kind_a(kind),
                 "note": "A practice letter. Nothing was sent to anyone."}
 
     def try_reply(self, scam, turns, reply, ip):

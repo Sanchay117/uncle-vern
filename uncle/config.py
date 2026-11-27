@@ -37,6 +37,10 @@ class Config:
         self.try_per_day = int(e("TRY_PER_DAY", "300"))
         # Practice letters by email for anyone else who forwards Uncle a scam (judges, friends), per sender.
         self.visitor_per_day = int(e("VISITOR_PER_DAY", "5"))
+        # How many times a visitor can reply to a practice letter as the scammer, and get Uncle's answer by email.
+        self.practice_rounds = int(e("PRACTICE_ROUNDS", "5"))
+        # Web searches (Apify) for copies of a scam, at most this many a day.
+        self.web_per_day = int(e("WEB_PER_DAY", "40"))
         # One short "did my letter reach you?" when a first letter gets no answer for this long.
         self.nudge_after_hours = float(e("NUDGE_AFTER_HOURS", "24"))
         # How alike (cosine of Pinecone embeddings) two scams must be to count as the same script. On real

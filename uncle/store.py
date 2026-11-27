@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS boots(
   disk_gb REAL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS tries(id INTEGER PRIMARY KEY AUTOINCREMENT, ip_hash TEXT, at REAL);
+CREATE TABLE IF NOT EXISTS web_checks(id INTEGER PRIMARY KEY AUTOINCREMENT, phrase TEXT, at REAL, result TEXT);
+CREATE TABLE IF NOT EXISTS practice(  -- someone who forwarded a scam, now playing the scammer by email
+  am_thread_id TEXT PRIMARY KEY,
+  visitor TEXT,
+  scam TEXT,
+  turns TEXT,           -- JSON [{who, text}], private, never served
+  started_at REAL,
+  updated_at REAL
+);
 CREATE TABLE IF NOT EXISTS diary(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at REAL,
@@ -89,7 +98,7 @@ class Store:
             self.db.executescript(SCHEMA)
             # Columns added after the first deploy: a disk made by an older Uncle gets them here.
             have = {r["name"] for r in self.db.execute("PRAGMA table_info(threads)").fetchall()}
-            for col, kind in (("kin", "TEXT"), ("vec", "TEXT")):
+            for col, kind in (("kin", "TEXT"), ("vec", "TEXT"), ("flags", "TEXT"), ("web", "TEXT")):
                 if col not in have:
                     self.db.execute(f"ALTER TABLE threads ADD COLUMN {col} {kind}")
             if "vec" not in have:
