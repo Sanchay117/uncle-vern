@@ -196,6 +196,9 @@ h2 small{font:13px/1.3 system-ui,sans-serif;color:var(--soft);margin-left:10px;l
 @media (max-width:560px){h2 small{display:block;margin:6px 0 0}}
 .replybox{margin-top:16px}.replybox textarea{min-height:110px}
 .read{font:13px/1.5 system-ui,sans-serif;color:var(--soft);margin:12px 0 0}
+.hear{font:13px/1 system-ui,sans-serif;color:var(--ink);background:none;border:0;padding:10px 2px 2px;cursor:pointer;
+text-decoration:underline;text-underline-offset:3px}
+.hear:hover{color:#000}
 
 /* mailbag */
 .bag{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px}
@@ -333,7 +336,7 @@ def page(title, body, desc="Uncle Vern answers scam emails, at length, so scamme
 <meta property="og:title" content="{esc(title)}"><meta property="og:description" content="{esc(desc)}">{share}
 <meta name="theme-color" content="#e9dfcb"><link rel="icon" href="{FAVICON}">
 {FONTS}<style>{CSS}</style></head><body>{FILTERS}<div class="airmail"></div><div class="wrap">{body}</div>
-<script>{ODO_JS}</script></body></html>"""
+<script>{ODO_JS}</script><script>{HEAR_JS}</script></body></html>"""
 
 
 BAR_RE = re.compile("█+")
@@ -704,6 +707,49 @@ ODO_JS = r"""
 })();
 """
 
+# Uncle reads his letters aloud in the browser's own voice, slow and low. Free: no connector, nothing sent anywhere.
+HEAR_JS = r"""
+(function(){
+  if (!('speechSynthesis' in window) || !window.SpeechSynthesisUtterance) return;
+  var LABEL = '▶ Hear Uncle read it', voice = null, playing = null;
+  function pick(){
+    var vs = speechSynthesis.getVoices() || [];
+    var prefs = [/^Fred$/i, /Ralph/i, /Daniel/i, /Albert/i, /Google US English/i, /Microsoft (Guy|David|Mark)/i];
+    for (var i = 0; i < prefs.length; i++){
+      for (var j = 0; j < vs.length; j++){ if (prefs[i].test(vs[j].name) && /^en/i.test(vs[j].lang)) return vs[j]; }
+    }
+    for (var k = 0; k < vs.length; k++){ if (/^en-US/i.test(vs[k].lang)) return vs[k]; }
+    return null;
+  }
+  voice = pick();
+  if ('onvoiceschanged' in speechSynthesis) speechSynthesis.onvoiceschanged = function(){ voice = pick(); };
+  function stop(){ if (playing){ playing.textContent = LABEL; playing = null; } }
+  function add(paper){
+    if (paper.getAttribute('data-hear')) return;
+    paper.setAttribute('data-hear', '1');
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'hear'; b.textContent = LABEL;
+    paper.insertAdjacentElement('afterend', b);
+    b.addEventListener('click', function(){
+      var mine = playing === b;
+      speechSynthesis.cancel(); stop();
+      if (mine) return;
+      var body = paper.querySelector('.body');
+      var text = (body ? body.textContent : '').replace(/█+/g, '').replace(/\s+/g, ' ').trim();
+      if (!text) return;
+      var u = new SpeechSynthesisUtterance(text);
+      if (voice) u.voice = voice;
+      u.rate = 0.86; u.pitch = 0.72;
+      u.onend = u.onerror = function(){ if (playing === b) stop(); };
+      playing = b; b.textContent = '■ Stop';
+      speechSynthesis.speak(u);
+    });
+  }
+  window.uncleHear = function(){ document.querySelectorAll('.paper.notepad').forEach(add); };
+  window.uncleHear();
+})();
+"""
+
 # Uncle types his practice letter himself, hunt-and-peck, with the odd typo he goes back to fix.
 TRY_JS = r"""
 (function(){
@@ -743,7 +789,7 @@ TRY_JS = r"""
     var id = 'typed' + (++n);
     box.insertAdjacentHTML('beforeend', '<p class="from" style="margin-top:18px">Uncle Vern wrote <span class="meta">(click to let him finish)</span></p>' +
       '<div class="paper notepad"><div class="body" id="' + id + '"></div></div>');
-    type(document.getElementById(id), j.letter, after);
+    type(document.getElementById(id), j.letter, function(){ if (window.uncleHear) uncleHear(); if (after) after(); });
   }
   function replyBox(box){
     if (!convo || convo.turns.length >= 7){

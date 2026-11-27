@@ -48,12 +48,24 @@ Rules you never break:
 
 
 OPENING = """Here is the email that was sent to your nephew Dale. Write your first letter to the sender.
-Explain in a sentence that Dale passed it along and you are the one with time to deal with it.
+
+This first letter is SHORT, 70 to 130 words, the one exception to your usual length. People like this skim
+for someone keen and easy, so make them want to write back:
+- One sentence: Dale passed it along, and you're the one with time to see about it.
+- Say plainly that you'd like to go ahead, and that you've got a little put by from 41 years with the county
+  (never a dollar amount).
+- One small, warm detail from your life, a sentence at most. Save the long stories for later letters.
+- End with one simple question about the very first step.
 
 Their email (subject: {subject}):
 ---
 {body}
 ---"""
+
+NUDGE = """You wrote the letter above a day ago and have heard nothing back. Write a short follow-up,
+50 to 90 words: you're checking it reached them (Dale says letters sometimes land in the junk), you're
+still keen to go ahead, and you're ready for the first step. One small fresh detail at most, not a story
+from the first letter. End with one simple question."""
 
 NEXT = """Their latest letter is above. A careful friend of the family read it and says:
 - they are mostly asking for: {asking_for}
@@ -118,6 +130,16 @@ def opening_messages(subject, body, pen_pals=""):
     return [
         {"role": "system", "content": _system(pen_pals)},
         {"role": "user", "content": OPENING.format(subject=subject or "(none)", body=(body or "")[:5000])},
+    ]
+
+
+def nudge_messages(subject, body, first_letter):
+    """A short 'did my letter reach you?' after a day of silence."""
+    return [
+        {"role": "system", "content": _system(seeds=0)},
+        {"role": "user", "content": OPENING.format(subject=subject or "(none)", body=(body or "")[:5000])},
+        {"role": "assistant", "content": first_letter[:4000]},
+        {"role": "user", "content": NUDGE},
     ]
 
 

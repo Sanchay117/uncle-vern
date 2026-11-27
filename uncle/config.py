@@ -37,5 +37,7 @@ class Config:
         self.try_per_day = int(e("TRY_PER_DAY", "300"))
         # Practice letters by email for anyone else who forwards Uncle a scam (judges, friends), per sender.
         self.visitor_per_day = int(e("VISITOR_PER_DAY", "5"))
+        # One short "did my letter reach you?" when a first letter gets no answer for this long.
+        self.nudge_after_hours = float(e("NUDGE_AFTER_HOURS", "24"))
         for k, v in overrides.items():
             setattr(self, k, v)

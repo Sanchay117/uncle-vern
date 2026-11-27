@@ -1,0 +1,16 @@
+# Uncle checks his mailbox once an hour. The ping wakes his Sprite; he picks up any mail the webhook
+# missed, follows up once on a first letter that has had no answer for a day, then goes back to sleep.
+name: Uncle's rounds
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+jobs:
+  rounds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Knock on Uncle's door
+        run: curl -fsS -m 60 https://uncle-vern-b6zgb.sprites.app/rounds

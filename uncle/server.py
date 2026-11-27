@@ -65,11 +65,22 @@ class App:
         self.meter = meter.Meter(self.store)
         self.jobs = queue.Queue()
         self.cards = {}  # key -> (version, png)
+        self.last_rounds = 0.0
 
     def start_background(self):
         self.meter.start()
         threading.Thread(target=self._worker, daemon=True, name="worker").start()
-        self.jobs.put(("catch_up", None))
+        self.queue_rounds()
+
+    def queue_rounds(self, every=900):
+        """Ask for a mailbox check, at most once every `every` seconds. Any visit can wake him, and an hourly
+        ping from outside makes sure one does."""
+        now = time.time()
+        if now - self.last_rounds < every:
+            return False
+        self.last_rounds = now
+        self.jobs.put(("rounds", None))
+        return True
 
     def _worker(self):
         while True:
@@ -81,6 +92,8 @@ class App:
                         self.engine.handle(arg)
                     elif kind == "catch_up":
                         self.engine.catch_up()
+                    elif kind == "rounds":
+                        self.engine.rounds()
             except Exception as exc:  # noqa: BLE001
                 self.store.note(f"Worker error: {exc}", kind="error", public=False)
 
@@ -203,6 +216,10 @@ def make_handler(app):
             app.meter.touch()
             path = self.path.split("?")[0]
             try:
+                if path == "/rounds":
+                    return self._json(200, {"queued": app.queue_rounds(every=300)})
+                if path in ("/", "/healthz") or path.startswith("/t/"):
+                    app.queue_rounds()
                 if path == "/":
                     return self._send(200, app.home_html())
                 m = re.fullmatch(r"/t/(\d+)", path)

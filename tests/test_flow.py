@@ -611,6 +611,38 @@ class FlowTests(unittest.TestCase):
         self.assertNotIn(judge, self.app.home_html())
         self.assertIn(f"mailto:{INBOX}", self.app.home_html())
 
+    def test_one_follow_up_after_a_day_of_silence(self):
+        t, first = self.forward_and_approve()
+        later = time.time() + 25 * 3600
+        self.assertEqual(self.eng.nudge_due(time.time() + 3600), 0)  # too soon
+        self.assertEqual(self.eng.nudge_due(later), 1)
+        nudge = self.mail.outbox[-1]
+        self.assertEqual((nudge["kind"], nudge["to"]), ("send", "claims.desk@barrister-office.example"))
+        self.assertTrue(nudge["subject"].startswith("Re: "))
+        self.assertEqual(persona.check_letter(nudge["text"]), [])
+        self.assertEqual(len([l for l in self.app.store.letters(t["id"]) if l["direction"] == "uncle"]), 2)
+        self.assertIn("make sure my letter got there", self.app.store.diary(1)[0]["text"])
+        self.assertEqual(self.eng.nudge_due(later + 48 * 3600), 0)  # only ever once
+        # Rounds also pick up anything the webhook missed.
+        self.assertEqual(self.eng.rounds(), {"caught_up": 0, "nudged": 0})
+        prompt = self.app.llm.calls[-1][-1]["content"]
+        self.assertIn("heard nothing back", prompt)
+        # A visit or the hourly ping asks for rounds, at most once in a while.
+        self.assertTrue(self.app.queue_rounds())
+        self.assertFalse(self.app.queue_rounds())
+
+    def test_no_follow_up_once_they_write(self):
+        t, sent = self.forward_and_approve()
+        mid, _ = self.mail.deliver("claims.desk@barrister-office.example", "Re: URGENT",
+                                   "Dear Vern, kindly send the processing fee.", thread_id=sent["thread_id"])
+        self.eng.handle(mid)
+        self.assertEqual(self.eng.nudge_due(time.time() + 25 * 3600), 0)
+
+    def test_first_letters_are_short_and_keen(self):
+        msgs = persona.opening_messages("URGENT", "Kindly send your details.")
+        self.assertIn("70 to 130 words", msgs[-1]["content"])
+        self.assertIn("never a dollar amount", msgs[-1]["content"])
+
     def test_the_same_scammer_twice_gets_one_letter(self):
         t, _ = self.forward_and_approve()
         n = len(self.mail.outbox)

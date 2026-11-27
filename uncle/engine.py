@@ -174,6 +174,36 @@ class Engine:
                 n += 1
         return n
 
+    def rounds(self):
+        """Uncle's mailbox check, whenever something wakes him: pick up missed mail, then follow up once on
+        any first letter that has gone a day without an answer."""
+        return {"caught_up": self.catch_up(), "nudged": self.nudge_due()}
+
+    def nudge_due(self, now=None):
+        with self.lock:
+            return self._nudge_due(now or time.time())
+
+    def _nudge_due(self, now):
+        sent = 0
+        for t in self.store.active_threads():
+            letters = self.store.letters(t["id"])
+            uncle = [l for l in letters if l["direction"] == "uncle"]
+            if len(uncle) != 1 or any(l["direction"] == "scammer" for l in letters) or t["origin_message_id"]:
+                continue  # they've written, or he's already followed up
+            if (uncle[0]["sent_at"] or now) > now - self.cfg.nudge_after_hours * 3600:
+                continue
+            if self.store.uncle_letters_since(now - DAY) >= self.cfg.max_letters_day:
+                break
+            letter, _ = persona.write_letter(self.llm, persona.nudge_messages(
+                t["scam_subject"], t["scam_text"], uncle[0]["body"]))
+            res = self.mail.send(self.cfg.inbox, t["scammer_addr"],
+                                 "Re: " + (t["scam_subject"] or "my letter")[:150], letter) or {}
+            self.store.add_letter(t["id"], "uncle", res.get("message_id"), letter, redact.private(letter),
+                                  sent_at=time.time())
+            self.store.note("Not a peep in a day, so I sent a short note to make sure my letter got there.", t["id"])
+            sent += 1
+        return sent
+
     # ------------------------------------------------------------ routing
     def _route(self, msg, sender):
         tid = msg.get("thread_id")
