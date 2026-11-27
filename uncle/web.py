@@ -10,6 +10,7 @@ import re
 import time
 import urllib.parse
 
+from . import redact
 from .engine import FRUSTRATION, jev_of
 
 
@@ -378,7 +379,7 @@ def thread_card(t, letters):
     fr = frustration_meter(t["frustration"]) if them else ""
     return f"""<a class="env" href="/t/{t['id']}">{postmark(round((t['scam_prob'] or 0) * 100))}
 <div class="tag">{esc(SCAM_LABEL.get(t['scam_type'], 'Scam'))}</div>
-<h3>{esc((t['scam_subject'] or 'A letter')[:80])}</h3>
+<h3>{esc((redact.subject(t['scam_subject']) or 'A letter')[:80])}</h3>
 <div class="meta">{esc(state)} · {len(uncle)} from Uncle</div>
 {fr}
 <p><b>{who}:</b> {letter_body(last[:400])}</p></a>"""
@@ -488,13 +489,13 @@ def thread_page(cfg, meter, t, letters, diary):
     body = f"""{header(meter)}
 <div class="thread-head"><div class="tag" style="margin:0">{esc(SCAM_LABEL.get(t['scam_type'], 'Scam'))} ·
 {dn()} {round((t['scam_prob'] or 0) * 100)}% scam · {esc(status)}</div>
-<h1>{esc(t['scam_subject'] or 'A letter')}</h1>
+<h1>{esc(redact.subject(t['scam_subject']) or 'A letter')}</h1>
 {frustration_meter(t['frustration']) if t['first_bite_at'] else ''}</div>
 <div class="conv">{''.join(parts)}</div>
 <h2>Uncle's diary for this one</h2><ul class="diary">{diary_html}</ul>
 {SCENE}
 <footer><a href="/">Back to the mailbag</a> · Scammers' letters have addresses, numbers, links and names blacked out.</footer>"""
-    return page(f"Uncle Vern vs. {t['scam_subject'] or 'a scammer'}", body)
+    return page(f"Uncle Vern vs. {redact.subject(t['scam_subject']) or 'a scammer'}", body)
 
 
 # Rolling odometer digits, like the Buick's. Falls back to plain numbers without JS.

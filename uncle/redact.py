@@ -1,4 +1,5 @@
 """Scammer letters go on the public page only after this."""
+import os
 import re
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
@@ -17,9 +18,25 @@ def bar(s):
     return BLOCK_CHAR * max(3, min(22, len(s)))
 
 
+def private(text):
+    """Black out the owner's own words (REDACT_WORDS, comma separated: their name, college, employer).
+
+    Safe for Uncle's letters too, which otherwise go up as written."""
+    for w in (w.strip() for w in os.environ.get("REDACT_WORDS", "").split(",")):
+        if len(w) > 2:
+            text = re.sub(re.escape(w), lambda m: bar(m.group()), text or "", flags=re.I)
+    return text or ""
+
+
+def subject(text):
+    """A scam's subject line, as the public page shows it."""
+    return redact(text).replace("\n", " ")
+
+
 def redact(text, names=()):
     if not text:
         return ""
+    text = private(text)
     t = QUOTED_RE.sub("", text)
     t = re.sub(r"(?m)^>.*$\n?", "", t)
     t = EMAIL_RE.sub(lambda m: bar(m.group()), t)

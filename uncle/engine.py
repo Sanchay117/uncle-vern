@@ -246,7 +246,8 @@ class Engine:
             now = time.time()
             self.store.update_thread(tid, status="active", approved_at=now,
                                      am_thread_id=res.get("thread_id") or thread["am_thread_id"])
-            self.store.add_letter(tid, "uncle", res.get("message_id"), thread["draft"], thread["draft"], sent_at=now)
+            self.store.add_letter(tid, "uncle", res.get("message_id"), thread["draft"], redact.private(thread["draft"]),
+                                  sent_at=now)
             self.store.note("The boss said yes. First letter's in the mail. Now I wait, and waiting is free.", tid)
             self._tell_owner(msg, f"Sent. I'll tell you when they bite. You can watch here: "
                                   f"{self.cfg.public_url}/t/{tid}\n\nVern")
@@ -311,7 +312,7 @@ class Engine:
         history = [(l["direction"], l["body"]) for l in self.store.letters(tid)]
         letter, problems = persona.write_letter(self.llm, persona.reply_messages(history, ask, fr))
         res = self.mail.reply(self.cfg.inbox, msg["message_id"], letter)
-        self.store.add_letter(tid, "uncle", res.get("message_id"), letter, letter, sent_at=time.time())
+        self.store.add_letter(tid, "uncle", res.get("message_id"), letter, redact.private(letter), sent_at=time.time())
         bite = "They bit! " if first else ""
         self.store.note(
             f"{bite}Letter from the scammer. {self.jev.name}: {pct(p_scam)} still a scam, {pct(hooked)} still hooked, "

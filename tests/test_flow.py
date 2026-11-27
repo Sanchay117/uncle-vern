@@ -116,6 +116,17 @@ class RedactTests(unittest.TestCase):
         self.assertIn("Barrister", t)
 
 
+    def test_owner_words_hidden_everywhere(self):
+        os.environ["REDACT_WORDS"] = "Priya Rao, Example Institute"
+        try:
+            self.assertNotIn("Example Institute", redact.subject("NOTICE 1 - Example Institute | Training program"))
+            self.assertNotIn("Priya Rao", redact.redact("Dear Priya Rao, send the fee."))
+            self.assertNotIn("priya rao", redact.private("my niece priya rao says hi"))
+            self.assertIn("Training program", redact.subject("NOTICE 1 - Example Institute | Training program"))
+        finally:
+            del os.environ["REDACT_WORDS"]
+
+
 class GatewayTests(unittest.TestCase):
     def test_parse_list(self):
         doc = {"connections": [
