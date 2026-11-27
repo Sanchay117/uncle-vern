@@ -220,7 +220,8 @@ class Engine:
             tid = self.store.new_thread(status="rejected", close_reason="too many open conversations", **base)
             self._tell_owner(msg, "My plate's full right now. I'll take this one when a pen pal gives up.\n\nVern")
             return tid
-        letter, problems = persona.write_letter(self.llm, persona.opening_messages(scam["subject"], scam["body"]))
+        letter, problems = persona.write_letter(self.llm, persona.opening_messages(
+            scam["subject"], scam["body"], pen_pals=self._pen_pals()))
         tid = self.store.new_thread(status="pending_approval", draft=letter, **base)
         self.store.note(
             f"New one from the boss: {kind_a(kind)} scam. {self.jev.name}: {pct(p)} scam, {pct(p_reply)} wants an "
@@ -334,7 +335,8 @@ class Engine:
             self.store.note("They wrote again, but I've done my letters for today. They can wait.", tid)
             return tid
         history = [(l["direction"], l["body"]) for l in self.store.letters(tid)]
-        letter, problems = persona.write_letter(self.llm, persona.reply_messages(history, ask, fr))
+        letter, problems = persona.write_letter(self.llm, persona.reply_messages(
+            history, ask, fr, pen_pals=self._pen_pals(exclude=tid)))
         _, writer = addr_of(msg.get("from"))
         res = self._answer(msg["message_id"], writer or thread["scammer_addr"],
                            msg.get("subject") or thread["scam_subject"], letter)
@@ -354,6 +356,21 @@ class Engine:
                              f"They bit! The scammer wrote back. Watch it unfold: {self.cfg.public_url}/t/{tid}"
                              "\n\nVern")
         return tid
+
+    def _pen_pals(self, exclude=None):
+        """Uncle's other conversations, as gossip-safe (kind, how it stands) pairs for the letter prompt."""
+        rows = self.store.q("SELECT id, scam_type, status, close_reason, first_bite_at FROM threads "
+                            "WHERE approved_at IS NOT NULL ORDER BY id DESC LIMIT 6")
+        others = []
+        for t in rows:
+            if t["id"] == exclude:
+                continue
+            if t["status"] == "closed":
+                how = "their mailbox got shut down" if "bounced" in (t["close_reason"] or "") else "stopped writing"
+            else:
+                how = "still writing to me" if t["first_bite_at"] else "hasn't written back yet"
+            others.append((t["scam_type"], how))
+        return persona.pen_pals_text(others)
 
     def _bounce(self, msg):
         """A mail server says a letter couldn't be delivered: the scammer's mailbox is gone."""
@@ -402,7 +419,8 @@ class Engine:
             self.store.note(f"A letter from someone new. {self.jev.name}: {pct(p)} scam, so I didn't answer.", public=True)
             return None
         name, _ = addr_of(msg.get("from"))
-        letter, _ = persona.write_letter(self.llm, persona.opening_messages(msg.get("subject", ""), text))
+        letter, _ = persona.write_letter(self.llm, persona.opening_messages(msg.get("subject", ""), text,
+                                                                            pen_pals=self._pen_pals()))
         tid = self.store.new_thread(
             status="pending_approval", scammer_addr=sender, scammer_name=name, scam_subject=msg.get("subject", ""),
             scam_text=text[:20000], scam_type=kind, scam_prob=p, draft=letter, am_thread_id=msg.get("thread_id"),
@@ -486,7 +504,7 @@ class Engine:
             return {"scam_prob": p, "scam_type": kind, "decider": self.jev.name,
                     "letter": None, "note": f"{self.jev.name} thinks this is only {pct(p)} likely to be a scam. Uncle only "
                                             "writes to scammers, so he's sitting this one out."}
-        letter, _ = persona.write_letter(self.llm, persona.opening_messages("", text))
+        letter, _ = persona.write_letter(self.llm, persona.opening_messages("", text, pen_pals=self._pen_pals()))
         return {"scam_prob": p, "scam_type": kind, "decider": self.jev.name, "letter": letter,
                 "note": "A practice letter. Nothing was sent to anyone."}
 
