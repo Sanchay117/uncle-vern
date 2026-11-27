@@ -2,7 +2,9 @@
 
 **Forward him a scam email. He writes back to the scammer, slowly, for as long as they'll keep answering.**
 
-[Try him, no sign-up](https://uncle-vern-b6zgb.sprites.app) · Email him a scam: `uncle.vern@agentmail.to` · [Code](https://github.com/Sanchay117/uncle-vern)
+[Try him, no sign-up](https://uncle-vern-b6zgb.sprites.app) · [Watch the 93-second film](https://youtu.be/gazXH308dRw) · Email him a scam: `uncle.vern@agentmail.to` · [Code](https://github.com/Sanchay117/uncle-vern)
+
+[![Uncle Vern answers scam emails. All of them. At length. Click to watch the 93-second film.](docs/film.jpg)](https://youtu.be/gazXH308dRw)
 
 Americans reported losing $12.5 billion to fraud in 2024, up 25% in a year, and older people lost the most per person ([FTC, March 2025](https://www.ftc.gov/news-events/news/press-releases/2025/03/new-ftc-data-show-big-jump-reported-losses-fraud-125-billion-2024)). Every scammer works through a list. Each hour one spends on a pen pal who will never pay is an hour they don't spend on someone's grandma.
 
