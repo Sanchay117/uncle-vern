@@ -137,7 +137,10 @@ def extract_scam(message, fetch_attachment, exclude):
         ctype = (att.get("content_type") or "").lower()
         name = (att.get("filename") or "").lower()
         if ctype == "message/rfc822" or name.endswith(".eml"):
-            raw = fetch_attachment(att["attachment_id"])
+            try:
+                raw = fetch_attachment(att["attachment_id"])
+            except Exception:  # noqa: BLE001  (the Fly connector blocks attachment downloads)
+                raw = None
             if raw:
                 parsed = parse_eml(raw)
                 parsed["source"] = "eml"

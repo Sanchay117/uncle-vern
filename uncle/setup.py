@@ -6,6 +6,7 @@
   python3 -m uncle.setup webhook https://<sprite-url>/webhook/agentmail [inbox]
   python3 -m uncle.setup webhooks [inbox]      # list the inbox's webhooks
   python3 -m uncle.setup judge file.txt        # what the decider says about an email (first line: subject)
+  python3 -m uncle.setup resend <thread id>    # ask the boss again about a draft they never got
 """
 import json
 import os
@@ -100,6 +101,10 @@ def main(argv):
             decider = clients.Jev(provider=which)
         print(f"{decider.name}:", json.dumps(decider.ask(intake_state(subject.strip(), body.strip()),
                                                          intake_questions()), indent=2))
+    elif argv[0] == "resend":
+        from .config import Config
+        from .server import App
+        print(App(Config()).engine.resend_approval(int(argv[1])))
     elif argv[0] == "webhooks":
         inbox = argv[1] if len(argv) > 1 else os.environ["UNCLE_INBOX"]
         hooks = clients.AgentMail().list_webhooks(inbox)

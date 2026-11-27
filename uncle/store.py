@@ -138,6 +138,12 @@ class Store:
     def thread_by_am(self, am_thread_id):
         return self.one("SELECT * FROM threads WHERE am_thread_id=?", (am_thread_id,))
 
+    def active_by_scammer(self, addr):
+        if not addr:
+            return None
+        return self.one("SELECT * FROM threads WHERE status='active' AND lower(scammer_addr)=? "
+                        "ORDER BY id DESC LIMIT 1", (addr.lower(),))
+
     def pending_by_owner_thread(self, owner_thread_id):
         return self.one("SELECT * FROM threads WHERE owner_thread_id=? ORDER BY id DESC LIMIT 1",
                         (owner_thread_id,))

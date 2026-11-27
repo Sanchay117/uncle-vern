@@ -44,8 +44,25 @@ class AgentMail:
     def list_webhooks(self, inbox_id):
         return self._call("GET", f"/inboxes/{_q(inbox_id)}/webhooks")
 
-    def get_message(self, inbox_id, message_id):
-        return self._call("GET", f"/inboxes/{_q(inbox_id)}/messages/{_q(message_id)}")
+    def get_message(self, inbox_id, message_id, thread_id=None):
+        try:
+            return self._call("GET", f"/inboxes/{_q(inbox_id)}/messages/{_q(message_id)}")
+        except net.HttpError as exc:
+            if exc.status != 403:
+                raise
+        # The Fly AgentMail connector blocks single-message reads, but a thread read carries
+        # every message in full, so find the message's thread and take it from there.
+        if not thread_id:
+            for m in self.list_messages(inbox_id, limit=100).get("messages", []):
+                if m.get("message_id") == message_id:
+                    thread_id = m.get("thread_id")
+                    break
+        if thread_id:
+            thread = self._call("GET", f"/inboxes/{_q(inbox_id)}/threads/{_q(thread_id)}")
+            for m in (thread or {}).get("messages", []):
+                if m.get("message_id") == message_id:
+                    return m
+        raise net.HttpError(404, "message not found in its thread", message_id)
 
     def list_messages(self, inbox_id, limit=50):
         return self._call("GET", f"/inboxes/{_q(inbox_id)}/messages?limit={limit}")
@@ -84,7 +101,7 @@ class MockAgentMail:
         }
         return mid, tid
 
-    def get_message(self, inbox_id, message_id):
+    def get_message(self, inbox_id, message_id, thread_id=None):
         if message_id not in self.messages:
             raise net.HttpError(404, "not found", message_id)
         return self.messages[message_id]

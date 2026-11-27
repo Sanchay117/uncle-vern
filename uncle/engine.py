@@ -10,7 +10,7 @@ import threading
 import time
 import traceback
 
-from . import intake, persona, redact
+from . import intake, net, persona, redact
 from .clients import choice, noul, p_yes, picked, score, scored
 
 DAY = 86400
@@ -88,6 +88,11 @@ def pct(p):
     return f"{round(p * 100)}%"
 
 
+def _err(exc):
+    """'HttpError 403: {"error": ...}' for the private diary."""
+    return f"{exc.__class__.__name__} {getattr(exc, 'status', '')}: {str(getattr(exc, 'body', '') or exc)[:160]}"
+
+
 def kind_a(kind):
     """'an advance fee', 'a romance'."""
     words = {"probe": "address-check"}.get(kind, (kind or "other").replace("_", " "))
@@ -158,6 +163,8 @@ class Engine:
                 return "owner_command", self._owner_command(msg, pending)
             return "intake", self._intake(msg)
         thread = self.store.thread_by_am(tid) if tid else None
+        # A fresh-email fallback starts a new mail thread, so also know a pen pal by address.
+        thread = thread or self.store.active_by_scammer(sender)
         if thread:
             return "scammer", self._scammer_letter(msg, thread)
         return "stranger", self._stranger(msg, sender)
@@ -168,8 +175,8 @@ class Engine:
         scam = intake.extract_scam(
             msg, lambda att: self.mail.get_attachment(self.cfg.inbox, msg["message_id"], att), exclude)
         if scam is None:
-            self._tell_owner(msg, "I couldn't find a forwarded email in that one. Use Forward (or Forward as "
-                                  "attachment) on the scam itself and send it to me.\n\nVern")
+            self._tell_owner(msg, "I couldn't find a forwarded email in that one. Open the scam itself, press plain "
+                                  "Forward (not \"as attachment\") and send it to me.\n\nVern")
             self.store.note("Got a note from the boss with no scam inside, so I asked for the real thing.")
             return None
         a = self.jev.ask(intake_state(scam["subject"], scam["body"]), intake_questions())
@@ -205,12 +212,7 @@ class Engine:
         if problems:
             self.store.note(f"My first draft broke a rule ({', '.join(sorted(set(problems)))}), so I rewrote it.",
                             tid, public=False)
-        self._tell_owner(msg, (
-            f"This one's {kind_a(kind)} scam. {self.jev.name} puts it at {pct(p)}.\n\n"
-            f"I'd like to write to: {to}\n\n"
-            "Here's my letter:\n\n"
-            f"{letter}\n\n"
-            "Reply \"yes\" and I'll send it. Reply \"no\" and I'll leave them be.\n\nVern"))
+        self._ask_approval(msg, tid, kind, p, to, letter)
         return tid
 
     def _pick_address(self, scam):
@@ -239,7 +241,8 @@ class Engine:
                 return tid
             if thread["origin_message_id"]:
                 # The scammer wrote to Uncle first: answer in their own thread.
-                res = self.mail.reply(self.cfg.inbox, thread["origin_message_id"], thread["draft"])
+                res = self._answer(thread["origin_message_id"], thread["scammer_addr"], thread["scam_subject"],
+                                   thread["draft"])
             else:
                 res = self.mail.send(self.cfg.inbox, thread["scammer_addr"],
                                      "Re: " + (thread["scam_subject"] or "your letter")[:150], thread["draft"])
@@ -249,8 +252,10 @@ class Engine:
             self.store.add_letter(tid, "uncle", res.get("message_id"), thread["draft"], redact.private(thread["draft"]),
                                   sent_at=now)
             self.store.note("The boss said yes. First letter's in the mail. Now I wait, and waiting is free.", tid)
-            self._tell_owner(msg, f"Sent. I'll tell you when they bite. You can watch here: "
-                                  f"{self.cfg.public_url}/t/{tid}\n\nVern")
+            otid = self._tell_owner(msg, f"Sent. I'll tell you when they bite. You can watch here: "
+                                         f"{self.cfg.public_url}/t/{tid}\n\nVern")
+            if otid and otid != thread["owner_thread_id"]:
+                self.store.update_thread(tid, owner_thread_id=otid)
         elif cmd == "decline" and thread["status"] == "pending_approval":
             self.store.update_thread(tid, status="declined", close_reason="owner said no")
             self.store.note("The boss said no to that one, so I tore up my letter.", tid)
@@ -311,7 +316,11 @@ class Engine:
             return tid
         history = [(l["direction"], l["body"]) for l in self.store.letters(tid)]
         letter, problems = persona.write_letter(self.llm, persona.reply_messages(history, ask, fr))
-        res = self.mail.reply(self.cfg.inbox, msg["message_id"], letter)
+        _, writer = addr_of(msg.get("from"))
+        res = self._answer(msg["message_id"], writer or thread["scammer_addr"],
+                           msg.get("subject") or thread["scam_subject"], letter)
+        if res.get("thread_id") and res["thread_id"] != thread["am_thread_id"]:
+            self.store.update_thread(tid, am_thread_id=res["thread_id"])
         self.store.add_letter(tid, "uncle", res.get("message_id"), letter, redact.private(letter), sent_at=time.time())
         bite = "They bit! " if first else ""
         self.store.note(
@@ -320,14 +329,24 @@ class Engine:
         if problems:
             self.store.note(f"Rewrote a draft that broke a rule ({', '.join(sorted(set(problems)))}).", tid,
                             public=False)
-        if first and thread["owner_message_id"]:
-            try:
-                self.mail.reply(self.cfg.inbox, thread["owner_message_id"],
-                                f"They bit! The scammer wrote back. Watch it unfold: {self.cfg.public_url}/t/{tid}"
-                                "\n\nVern")
-            except Exception:  # noqa: BLE001
-                pass
+        if first and thread["owner_message_id"] and self.cfg.owner_emails:
+            self._tell_owner({"message_id": thread["owner_message_id"], "thread_id": thread["owner_thread_id"],
+                              "from": self.cfg.owner_emails[0], "subject": "They bit"},
+                             f"They bit! The scammer wrote back. Watch it unfold: {self.cfg.public_url}/t/{tid}"
+                             "\n\nVern")
         return tid
+
+    def _answer(self, message_id, to, subject, text):
+        """Reply in a thread. The Fly AgentMail connector refuses message ids containing '=' (most
+        Gmail ones), so when it does, send a fresh 'Re:' email to the same person instead."""
+        try:
+            return self.mail.reply(self.cfg.inbox, message_id, text) or {}
+        except net.HttpError as exc:
+            if exc.status != 403:
+                raise
+        subject = subject or "your letter"
+        subject = subject if subject.lower().startswith("re:") else "Re: " + subject
+        return self.mail.send(self.cfg.inbox, to, subject[:150], text) or {}
 
     # ------------------------------------------------------------ someone writes to Uncle first
     def _stranger(self, msg, sender):
@@ -363,11 +382,46 @@ class Engine:
         return tid
 
     def _tell_owner(self, msg, text):
+        """Answer the boss in their own thread, or failing that in a fresh email.
+
+        Returns the AgentMail thread id their answer will arrive in (None if nothing got through)."""
         try:
-            self.mail.reply(self.cfg.inbox, msg["message_id"], text)
+            res = self.mail.reply(self.cfg.inbox, msg["message_id"], text)
+            return (res or {}).get("thread_id") or msg.get("thread_id")
         except Exception as exc:  # noqa: BLE001
-            self.store.note(f"Couldn't write back to the boss ({exc.__class__.__name__}).", kind="error",
+            first = exc
+        _, owner = addr_of(msg.get("from"))
+        subject = msg.get("subject") or "your letter"
+        subject = subject if subject.lower().startswith("re:") else "Re: " + subject
+        try:
+            res = self.mail.send(self.cfg.inbox, owner or self.cfg.owner_emails[0], subject[:150], text)
+            self.store.note(f"Replying in the boss's thread failed ({_err(first)}), so I wrote a fresh email.",
+                            kind="error", public=False)
+            return (res or {}).get("thread_id")
+        except Exception as exc:  # noqa: BLE001
+            self.store.note(f"Couldn't write back to the boss ({_err(first)}; then {_err(exc)}).", kind="error",
                             public=False)
+            return None
+
+    def _ask_approval(self, msg, tid, kind, p, to, letter):
+        otid = self._tell_owner(msg, (
+            f"This one's {kind_a(kind)} scam. {self.jev.name} puts it at {pct(p)}.\n\n"
+            f"I'd like to write to: {to}\n\n"
+            "Here's my letter:\n\n"
+            f"{letter}\n\n"
+            "Reply \"yes\" and I'll send it. Reply \"no\" and I'll leave them be.\n\nVern"))
+        if otid and otid != msg.get("thread_id"):
+            self.store.update_thread(tid, owner_thread_id=otid)
+        return otid
+
+    def resend_approval(self, tid):
+        """Ask the boss again about a draft whose first ask never reached them."""
+        t = self.store.thread(tid)
+        if not t or t["status"] != "pending_approval":
+            return "not waiting for approval"
+        msg = self.mail.get_message(self.cfg.inbox, t["owner_message_id"], t["owner_thread_id"])
+        otid = self._ask_approval(msg, tid, t["scam_type"], t["scam_prob"], t["scammer_addr"], t["draft"])
+        return f"sent; the boss's answer will arrive in thread {otid}" if otid else "failed again, see the diary"
 
     # ------------------------------------------------------------ the public "try Uncle" box
     def try_uncle(self, text, ip):

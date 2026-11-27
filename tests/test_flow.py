@@ -41,6 +41,14 @@ def make_app(tmp):
 
 
 class IntakeTests(unittest.TestCase):
+    def test_blocked_attachment_falls_back_to_inline_forward(self):
+        def blocked(_):
+            raise RuntimeError("endpoint is not supported by the AgentMail connector")
+        msg = {"text": GMAIL_FORWARD, "attachments": [{"attachment_id": "a1", "content_type": "message/rfc822"}]}
+        p = intake.extract_scam(msg, blocked, {OWNER, INBOX})
+        self.assertEqual(p["source"], "inline")
+        self.assertEqual(p["from_addr"], "james.okoro@outlook-mail.example")
+
     def test_gmail_inline_forward(self):
         p = intake.parse_forward(GMAIL_FORWARD)
         self.assertEqual(p["from_addr"], "james.okoro@outlook-mail.example")
@@ -125,6 +133,32 @@ class RedactTests(unittest.TestCase):
             self.assertIn("Training program", redact.subject("NOTICE 1 - Example Institute | Training program"))
         finally:
             del os.environ["REDACT_WORDS"]
+
+
+class AgentMailConnectorTests(unittest.TestCase):
+    def test_message_read_falls_back_to_its_thread(self):
+        calls = []
+
+        def fake_request(method, url, body=None, headers=None, timeout=30):
+            calls.append(url)
+            if "/messages/%3Cm2%40x%3E" in url:
+                raise clients.net.HttpError(403, '{"error":"endpoint is not supported"}', url)
+            if "/messages?limit=" in url:
+                return {"messages": [{"message_id": "<m1@x>", "thread_id": "t9"},
+                                     {"message_id": "<m2@x>", "thread_id": "t7"}]}
+            if url.endswith("/threads/t7"):
+                return {"messages": [{"message_id": "<m0@x>", "text": "old"},
+                                     {"message_id": "<m2@x>", "text": "Fwd: the scam"}]}
+            raise AssertionError(url)
+
+        real = clients.net.request
+        clients.net.request = fake_request
+        try:
+            am = clients.AgentMail(endpoint=gateway.Endpoint("https://gw.example/agentmail/c1", {}))
+            self.assertEqual(am.get_message("u@agentmail.to", "<m2@x>")["text"], "Fwd: the scam")
+            self.assertTrue(calls[-1].endswith("/threads/t7"))
+        finally:
+            clients.net.request = real
 
 
 class GatewayTests(unittest.TestCase):
@@ -346,6 +380,42 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0]["to"], "claims.desk@barrister-office.example")
         return self.app.store.thread(t["id"]), sent[0]
+
+    def test_blocked_reply_falls_back_to_fresh_email_and_yes_still_works(self):
+        def blocked(*_):
+            raise clients.net.HttpError(403, '{"error":"endpoint is not supported"}', "reply")
+        self.mail.reply = blocked
+        mid, owner_tid = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.assertEqual(self.eng.handle(mid), "intake")
+        ask = self.mail.outbox[-1]
+        self.assertEqual((ask["kind"], ask["to"]), ("send", OWNER))
+        self.assertTrue(ask["subject"].startswith("Re: "))
+        self.assertIn("Reply \"yes\"", ask["text"])
+        # The boss answers in the new thread, and Uncle writes to the scammer.
+        mid2, _ = self.mail.deliver(OWNER, "Re: Fwd", "yes", thread_id=ask["thread_id"])
+        self.assertEqual(self.eng.handle(mid2), "owner_command")
+        sent = [o for o in self.mail.outbox if o["kind"] == "send" and o["to"] != OWNER]
+        self.assertEqual(sent[0]["to"], "claims.desk@barrister-office.example")
+        # The scammer writes back; Uncle can't reply in-thread either, so he sends a fresh "Re:".
+        scammer = "claims.desk@barrister-office.example"
+        mid3, _ = self.mail.deliver(scammer, "Re: URGENT", "Dear Vern, kindly send the processing fee today.",
+                                    thread_id=sent[0]["thread_id"])
+        self.assertEqual(self.eng.handle(mid3), "scammer")
+        letter = self.mail.outbox[-2] if self.mail.outbox[-1]["to"] == OWNER else self.mail.outbox[-1]
+        self.assertEqual((letter["kind"], letter["to"]), ("send", scammer))
+        self.assertTrue(letter["subject"].startswith("Re: "))
+        # Their next letter lands in that new mail thread, or another, and still reaches the right pen pal.
+        mid4, _ = self.mail.deliver(scammer, "Re: Re: URGENT", "Vern, the fee. Western Union. Today.",
+                                    thread_id="some-other-thread")
+        self.assertEqual(self.eng.handle(mid4), "scammer")
+
+    def test_resend_approval(self):
+        mid, _ = self.mail.deliver(OWNER, "Fwd: URGENT inheritance", GMAIL_FORWARD)
+        self.eng.handle(mid)
+        tid = self.app.store.q("SELECT id FROM threads")[0]["id"]
+        before = len(self.mail.outbox)
+        self.assertTrue(self.eng.resend_approval(tid).startswith("sent"))
+        self.assertEqual(len(self.mail.outbox), before + 1)
 
     def test_full_loop(self):
         t, sent = self.forward_and_approve()
