@@ -12,7 +12,6 @@
      OWNER_EMAILS=you@example.com
      UNCLE_INBOX=uncle.vern@agentmail.to
      PUBLIC_URL=https://uncle-vern-xxxx.sprites.app
-     CODE_URL=https://github.com/...
      UNCLE_DB=/home/sprite/uncle-data/uncle.db
      UNCLE_MODEL=gpt-oss:120b
      ```

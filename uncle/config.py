@@ -12,7 +12,6 @@ class Config:
         self.db_path = e("UNCLE_DB", os.path.join(os.getcwd(), "data", "uncle.db"))
         self.port = int(e("PORT", "8080"))
         self.public_url = e("PUBLIC_URL", "http://localhost:8080").rstrip("/")
-        self.code_url = e("CODE_URL", "https://github.com/")
         # The people allowed to point Uncle at a scammer and approve his letters.
         self.owner_emails = _list(e("OWNER_EMAILS", ""))
         # Uncle's own AgentMail inbox, e.g. uncle.vern@agentmail.to

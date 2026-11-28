@@ -666,7 +666,7 @@ money, links or real details. And I stop the minute anybody asks. <span style="f
 API keys stored on this machine: <b>{keys_on_box}</b>, so there's nothing for a
 scammer to talk him out of.<br>
 Credit where it's due: Netsafe's Re:scam (New Zealand, 2017) and O2's Daisy (UK, 2024) wasted scammers' time for a
-whole country. Uncle Vern is your own. · <a href="{esc(cfg.code_url)}">Code</a></footer>
+whole country. Uncle Vern is your own.</footer>
 <script>{TRY_JS}</script>"""
     return page("Uncle Vern answers scam emails", body, image=card, url=cfg.public_url + "/")
 
