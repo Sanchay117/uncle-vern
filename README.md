@@ -2,7 +2,7 @@
 
 **Forward him a scam email. He writes back to the scammer, slowly, for as long as they'll keep answering.**
 
-[Try him, no sign-up](https://uncle-vern-b6zgb.sprites.app) · [Watch the 93-second film](https://youtu.be/gazXH308dRw) · Email him a scam: `uncle.vern@agentmail.to` · [Code](https://github.com/Sanchay117/uncle-vern)
+[Try him, no sign-up](https://uncle-vern-b6zgb.sprites.app) · [Watch the 93-second film](https://youtu.be/gazXH308dRw) · [X thread](https://x.com/eepy_engineer/status/2126377467929825437) · [Fly forum post](https://community.fly.io/t/uncle-vern-a-scambaiter-that-sleeps-on-a-sprite-until-a-scammer-writes-back-hacksgiving/29193) · Email him a scam: `uncle.vern@agentmail.to`
 
 [![Uncle Vern answers scam emails. All of them. At length. Click to watch the 93-second film.](docs/film.jpg)](https://youtu.be/gazXH308dRw)
 
@@ -38,6 +38,7 @@ Scammers answer hours or days apart. Uncle has to be there when they do, and cos
   - **Pinecone** embeddings give Uncle a memory for scam scripts. When a new scam is the same letter as an old one from a different address, he says so.
   - **Apify** (Google Search Scraper) searches the web for one sentence of each scam, never one with a name, address or number in it, and links the pages where the same letter was already posted.
   - **Deepgram** (Aura-2) reads his letters aloud on the page.
+- **Gaps reported along the way.** Both are on the Fly forum with repros: [Sprites connector gaps](https://community.fly.io/t/sprites-connector-gaps-agentmail-webhooks-ids-with-attachments-apify-run-sync-ollama-v1-systemone/29187) (AgentMail webhooks, ids with `=` and attachments, Apify run-sync, Ollama `/v1/systemone`) and [`sprite file push` says an existing folder does not exist](https://community.fly.io/t/sprite-file-push-says-an-existing-folder-does-not-exist-p-works/29189).
 
 ## Proof
 
