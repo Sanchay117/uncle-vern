@@ -388,6 +388,33 @@ class PageMathTests(unittest.TestCase):
         self.assertIn("over 1 wake-up;", svg)
         self.assertIn("Awake 10 m", svg)
 
+    def test_wake_strip_says_when_most_wakes_are_short(self):
+        from uncle import web
+        now = 1_800_000_000
+        wakes = [{"started_at": now - 7200 + i * 600, "last_seen": now - 7200 + i * 600 + 20} for i in range(3)]
+        wakes.append({"started_at": now - 600, "last_seen": now - 60})
+        svg = web.wake_strip(wakes, now)
+        self.assertIn("3 of the 4 lasted under a minute", svg)
+        long_only = web.wake_strip([{"started_at": now - 600, "last_seen": now - 60}], now)
+        self.assertNotIn("under a minute", long_only)
+
+    def test_diary_folds_lines_of_the_same_kind(self):
+        from uncle import web
+        diary = [{"at": 6, "text": "The boss said yes. First letter's in the mail. Now I wait."},
+                 {"at": 5, "text": "New one from the boss: advance fee scam. 98%"},
+                 {"at": 4, "text": "The boss said yes. First letter's in the mail. Now I wait."},
+                 {"at": 3, "text": "New one from the boss: romance scam. 95%"},
+                 {"at": 2, "text": "Hourly rounds: nothing new."},
+                 {"at": 1, "text": "New one from the boss: loan scam. 97%"}]
+        runs = web.diary_runs(diary)
+        self.assertEqual([(d["at"], n) for d, n in runs], [(6, 1), (5, 2), (2, 0)])
+
+    def test_ledger_shows_how_the_letter_count_adds_up(self):
+        from uncle import web
+        html = web.ledger({"approached": 10, "bounced": 3, "uncle_letters": 10}, 0, 7)
+        self.assertIn("7 scammers have his letter", html)
+        self.assertIn("He wrote to 10; 3 of those addresses were already shut down.", html)
+
 
 class GatewayTests(unittest.TestCase):
     def test_parse_list(self):

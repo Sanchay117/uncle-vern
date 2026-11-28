@@ -443,14 +443,18 @@ def wake_strip(wakes, now, hours=24):
     def x(t):
         return 10 + 980 * (max(start, min(now, t)) - start) / span
 
-    marks, awake = [], 0
+    marks, awake, lengths = [], 0, []
     for w in wakes:
         a = w["started_at"]
         b = max(w["last_seen"] or a, a)
         if b < start or a > now:
             continue
         awake += min(b, now) - max(a, start)
+        lengths.append(b - a)
         marks.append(f'<rect x="{x(a):.1f}" y="4" width="{max(3.0, x(b) - x(a)):.1f}" height="28"/>')
+    short = sum(1 for s in lengths if s < 60)
+    most = (f" {short} of the {len(lengths)} lasted under a minute; the long ones are people trying him, one "
+            "after another." if lengths and short * 2 > len(lengths) else "")
     # Labels in HTML, not the SVG, so they stay readable when the strip shrinks to a phone's width.
     ticks = "".join(f'<span>{"now" if h == 0 else f"{h} h ago"}</span>' for h in range(hours, -1, -6))
     return f"""<div class="wakebox"><svg class="wakes" viewBox="0 0 1000 36" preserveAspectRatio="none" role="img"
@@ -458,16 +462,18 @@ def wake_strip(wakes, now, hours=24):
 <path d="M10 18 H990" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 6" vector-effect="non-scaling-stroke"/>{''.join(marks)}</svg>
 <div class="ticks">{ticks}</div>
 <p><b>Uncle's last {hours} hours.</b> Each mark is a stretch he was awake: a letter came in, someone tried him,
-or he was looked in on. Awake {esc(dur(awake)) if awake else "0 s"} in all, over {len(marks)} wake-up{"" if len(marks) == 1 else "s"}; asleep the rest.</p></div>"""
+or he was looked in on (opening this page wakes him too). Awake {esc(dur(awake)) if awake else "0 s"} in all, over {len(marks)} wake-up{"" if len(marks) == 1 else "s"}; asleep the rest.{most}</p></div>"""
 
 
 READ_WPM, WRITE_WPM = 200, 25
 
 
-def wasted_tile(wasted, waiting=0):
+def wasted_tile(wasted, waiting=0, approached=0, bounced=0):
     if wasted:
         return f'<div class="big"><b>{esc(dur(wasted))}</b><small>Scammer time wasted (est.)</small></div>'
-    return (f'<div class="big"><b>{waiting} scammer{" has" if waiting == 1 else "s have"} his letter</b><small>None '
+    tally = (f"He wrote to {approached}; {bounced} of those addresses were already shut down. "
+             if approached and bounced else "")
+    return (f'<div class="big"><b>{waiting} scammer{" has" if waiting == 1 else "s have"} his letter</b><small>{tally}None '
             'has written back yet. After a day of quiet he sends one short "did it reach you?", and the '
             'time-wasted clock starts with the first reply.</small></div>')
 
@@ -487,7 +493,8 @@ def ledger(totals, wasted, waiting):
                  (odo(totals.get('bounced') or 0), "Addresses already shut down")]
         cls = "ledger three"
     cells = "".join(f"<div><b>{v}</b><small>{label}</small></div>" for v, label in tiles)
-    return f'<div class="{cls}">\n{wasted_tile(wasted, waiting)}\n{cells}\n</div>'
+    big = wasted_tile(wasted, waiting, totals.get('approached') or 0, totals.get('bounced') or 0)
+    return f'<div class="{cls}">\n{big}\n{cells}\n</div>'
 
 
 def wasted_seconds(totals):
@@ -574,7 +581,8 @@ def by_mail(cfg, capped_until=None):
         return ""
     if capped_until:
         g = time.gmtime(capped_until)
-        cap = (f" <b>Heads up:</b> Uncle's mailbox is new, so until {time.strftime('%b', g)} {g.tm_mday} the mail "
+        cap = (f" <b>Heads up:</b> Uncle's mailbox is new, so until {time.strftime('%H:%M', g)} UTC on "
+               f"{time.strftime('%b', g)} {g.tm_mday} the mail "
                "service only lets him write to a few new people. If he doesn't answer your email, the try box "
                "above does the same thing, right here.")
     else:
@@ -600,13 +608,31 @@ def desk(latest_scam, letters_out=0):
 <div class="sticky">Send me your scams. I've got all the time in the world.<small>Uncle V.</small></div></div>"""
 
 
+def diary_runs(diary):
+    """Fold diary lines of the same kind ("New one from the boss: ...", "The boss said yes...") into the
+    newest one, with a count of the older ones. Newest first, as the diary comes. Returns (entry, how many more)."""
+    def kind(text):
+        head = text.split(":", 1)[0]
+        return head if ":" in text and len(head) <= 40 else text
+    out, seen = [], {}
+    for d in diary:
+        k = kind(d["text"])
+        if k in seen:
+            seen[k][1] += 1
+        else:
+            seen[k] = [d, 0]
+            out.append(seen[k])
+    return [(d, n) for d, n in out]
+
+
 def home(cfg, totals, meter, threads, letters_by_thread, diary, keys_on_box, latest_scam=None, wakes=(),
          card=None, families=(), memory_name=None, voice_name=None, web_name=None, capped_until=None,
          sample=None):
     cards = "".join(thread_card(t, letters_by_thread.get(t["id"], [])) for t in threads) or \
         '<div class="empty">No pen pals yet. Uncle is sitting by the mailbox.</div>'
     diary_html = "".join(
-        f'<li><time>{esc(ago(d["at"]))}</time><span>{esc(d["text"])}</span></li>' for d in diary) or \
+        f'<li><time>{esc(ago(d["at"]))}</time><span>{esc(d["text"])}'
+        f'{f" (and {n} more like it before this)" if n else ""}</span></li>' for d, n in diary_runs(diary)) or \
         '<li><time></time><span>Nothing yet.</span></li>'
     wasted = wasted_seconds(totals)
     waiting = sum(1 for t in threads if t['status'] == 'active')
